@@ -70,6 +70,7 @@ cmake_install.cmake
 /.bmake
 /build.log
 /build.out
+/build-vs/
 /empty.h
 Makefile
 !/contrib/cygtermd/Makefile
