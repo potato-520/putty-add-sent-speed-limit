@@ -20,7 +20,7 @@
 
 ```text
 Terminal -> Line discipline options
-Maximum bytes sent per second (0 for unlimited)
+Max send rate (bytes/s, 0=unlimited)
 ```
 
 含义：
@@ -122,7 +122,7 @@ interval = ceil(1000ms / bytes_per_second)
 
 1. 打开 PuTTY。
 2. 进入 `Terminal -> Line discipline options`。
-3. 在 `Maximum bytes sent per second (0 for unlimited)` 中输入限速值。
+3. 在 `Max send rate (bytes/s, 0=unlimited)` 中输入限速值。
 4. 如需保存，回到 `Session` 页面保存当前 session。
 5. 连接开发板后再复制粘贴大段文本。
 
