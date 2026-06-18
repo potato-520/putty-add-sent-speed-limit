@@ -1,14 +1,15 @@
-# PuTTY 发送限速改造版
+# PuTTY 本地增强版
 
-本仓库基于官方 PuTTY 源码改造，增加了“本地输入发送限速”能力，用于缓解嵌入式开发板串口输入缓冲较小、接收任务优先级较低时，复制粘贴大段文本导致接收端丢数据的问题。
+本仓库基于官方 PuTTY 源码改造，增加了“本地输入发送限速”和“SSH 外部私钥自动内存导入”能力。前者用于缓解嵌入式开发板串口输入缓冲较小、接收任务优先级较低时，复制粘贴大段文本导致接收端丢数据的问题；后者用于让 putty/plink 直接接受 OpenSSH/ssh.com 格式的 SSH2 私钥，减少手动转换 PPK 的操作。
 
-本文件是本仓库的主 README，重点说明本次发送限速改造。官方原版源码说明保留在 [`README`](README)。
+本文件是本仓库的主 README，重点说明本地增强功能。官方原版源码说明保留在 [`README`](README)。
 
 ## 基线版本
 
 - 官方源码版本：PuTTY Release 0.84
 - 版本来源：源码中的 `version.h`
 - 本次功能提交：`7243950 Add configurable send rate limit`
+- SSH 外部私钥导入：putty/plink 连接时自动识别 OpenSSH PEM、OpenSSH new、ssh.com SSH2 私钥并在内存中导入
 
 - 官方原版 README：[`README`](README)
 
@@ -63,6 +64,26 @@ plink -sendrate abc example.com
 plink -sendrate -1 example.com
 ```
 
+### 3. SSH 外部私钥自动内存导入
+
+原版 PuTTY / plink 的 SSH2 私钥认证主要要求 `-i` 指定 PuTTY PPK 文件。本仓库新增了运行时自动识别和内存导入能力：
+
+- 指定 `.ppk`：保持原有 PPK 加载路径。
+- 指定 OpenSSH PEM 私钥，例如传统 `-----BEGIN RSA PRIVATE KEY-----`：自动在内存中导入。
+- 指定 OpenSSH new 格式私钥，例如 `-----BEGIN OPENSSH PRIVATE KEY-----`：自动在内存中导入。
+- 指定 ssh.com SSH2 私钥：自动在内存中导入。
+
+示例：
+
+```bash
+plink -ssh user@example.com -i ~/.ssh/id_rsa
+plink -ssh user@example.com -i ~/.ssh/id_ed25519
+```
+
+该功能不会调用外部 `puttygen`，也不会自动生成或缓存 `.ppk` 文件。导入后的私钥只保存在本次 SSH 认证流程的内存对象中。
+
+需要注意：对于加密的 OpenSSH/ssh.com 私钥，为了在查询 Pageant 前生成公钥 blob 并保持“只尝试与配置 keyfile 匹配的 Pageant key”的行为，程序会比 PPK 路径更早提示输入私钥口令。
+
 ## 修改过的源码文件
 
 | 文件 | 作用 |
@@ -73,6 +94,8 @@ plink -sendrate -1 example.com
 | `ldisc.c` | PuTTY GUI 本地输入路径增加有序限速发送队列 |
 | `windows/plink.c` | Windows plink stdin 发送路径增加限速队列 |
 | `unix/plink.c` | Unix plink stdin / BRK 发送路径增加限速队列 |
+| `ssh/userauth2-client.c` | SSH2 用户认证路径增加 OpenSSH/ssh.com 私钥自动识别与内存导入 |
+| `ssh/CMakeLists.txt` | 让 SSH client 链接现有 `keygen` 库以复用 `import.c` 导入能力 |
 
 ## 限速原理
 
@@ -157,6 +180,18 @@ plink -ssh user@example.com -sendrate 200
 plink -sendrate 0 example.com
 ```
 
+OpenSSH 私钥示例：
+
+```bash
+plink -ssh user@example.com -i ~/.ssh/id_rsa
+```
+
+如果仍指定 PPK 文件，行为保持不变：
+
+```bash
+plink -ssh user@example.com -i mykey.ppk
+```
+
 ## 构建说明
 
 本仓库保留了用于 WSL 调用 Windows 工具链构建的脚本：
@@ -181,10 +216,12 @@ plink.exe
 ## 已验证内容
 
 - `./build.sh` 构建通过。
+- `./build.sh plink putty pscp psftp test_conf` 构建通过。
 - `plink --help` 能显示 `-sendrate bytes-per-second`。
 - `plink -sendrate abc ...` 会报错退出。
 - `plink -sendrate -1 ...` 会报错退出。
 - 默认值 `0` 表示不限速。
+- SSH 外部私钥导入相关目标已完成编译/链接验证。
 
 ## 未覆盖的验证
 
@@ -194,3 +231,5 @@ plink.exe
 - 最适合目标开发板的限速值。
 - 低速率下长文本粘贴的完整性。
 - 特定串口驱动、USB 转串口芯片或目标系统任务调度对接收效果的影响。
+- OpenSSH PEM、OpenSSH new、ssh.com SSH2 私钥的真实 SSH 服务器登录矩阵。
+- 加密外部私钥错误口令重试、取消输入、服务端拒绝 key 等交互细节。

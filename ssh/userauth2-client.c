@@ -72,6 +72,7 @@ struct ssh2_userauth_state {
     bool privatekey_available, privatekey_encrypted;
     char *publickey_algorithm;
     char *publickey_comment;
+    ssh2_userkey *preimported_foreign_key;
     void *agent_response_to_free;
     ptrlen agent_response;
     BinarySource asrc[1];          /* for reading SSH agent response */
@@ -137,6 +138,22 @@ static void ssh2_userauth_final_output(PacketProtocolLayer *ppl);
 static void ssh2_userauth_print_banner(struct ssh2_userauth_state *s);
 static ptrlen workaround_rsa_sha2_cert_userauth(
     struct ssh2_userauth_state *s, ptrlen id);
+
+static bool ssh2_userauth_key_type_is_importable(int keytype)
+{
+    return import_possible(keytype) &&
+        import_target_type(keytype) == SSH_KEYTYPE_SSH2;
+}
+
+static void ssh2_userauth_free_userkey(ssh2_userkey *key)
+{
+    if (!key || key == SSH2_WRONG_PASSPHRASE)
+        return;
+
+    ssh_key_free(key->key);
+    sfree(key->comment);
+    sfree(key);
+}
 
 static const PacketProtocolLayerVtable ssh2_userauth_vtable = {
     .free = ssh2_userauth_free,
@@ -226,6 +243,7 @@ static void ssh2_userauth_free(PacketProtocolLayer *ppl)
         free_prompts(s->cur_prompt);
     sfree(s->publickey_comment);
     sfree(s->publickey_algorithm);
+    ssh2_userauth_free_userkey(s->preimported_foreign_key);
     if (s->publickey_blob)
         strbuf_free(s->publickey_blob);
     if (s->detached_cert_blob)
@@ -495,6 +513,97 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                 strbuf_free(s->publickey_blob);
                 s->publickey_blob = NULL;
             }
+        } else if (ssh2_userauth_key_type_is_importable(keytype)) {
+            const char *error = NULL;
+            char *comment = NULL;
+            char *passphrase;
+            ssh2_userkey *key = NULL;
+
+            s->privatekey_encrypted =
+                import_encrypted(s->keyfile, keytype, &comment);
+
+            while (!key) {
+                bool had_passphrase = false;
+
+                if (s->privatekey_encrypted) {
+                    s->cur_prompt = ssh_ppl_new_prompts(&s->ppl);
+                    s->cur_prompt->to_server = false;
+                    s->cur_prompt->from_server = false;
+                    s->cur_prompt->name = dupstr("SSH key passphrase");
+                    add_prompt(s->cur_prompt,
+                               dupprintf("Passphrase for key \"%s\": ",
+                                         comment ? comment :
+                                         filename_to_str(s->keyfile)),
+                               false);
+                    s->spr = seat_get_userpass_input(
+                        ppl_get_iseat(&s->ppl), s->cur_prompt);
+                    while (s->spr.kind == SPRK_INCOMPLETE) {
+                        crReturnV;
+                        s->spr = seat_get_userpass_input(
+                            ppl_get_iseat(&s->ppl), s->cur_prompt);
+                    }
+                    if (spr_is_abort(s->spr)) {
+                        sfree(comment);
+                        free_prompts(s->cur_prompt);
+                        s->cur_prompt = NULL;
+                        ssh_bpp_queue_disconnect(
+                            s->ppl.bpp, "Unable to authenticate",
+                            SSH2_DISCONNECT_AUTH_CANCELLED_BY_USER);
+                        ssh_spr_close(s->ppl.ssh, s->spr,
+                                      "passphrase prompt");
+                        return;
+                    }
+                    passphrase = prompt_get_result(s->cur_prompt->prompts[0]);
+                    had_passphrase = true;
+                    free_prompts(s->cur_prompt);
+                    s->cur_prompt = NULL;
+                } else {
+                    passphrase = NULL;
+                }
+
+                key = import_ssh2(s->keyfile, keytype, passphrase, &error);
+                if (passphrase) {
+                    smemclr(passphrase, strlen(passphrase));
+                    sfree(passphrase);
+                }
+
+                if (key == SSH2_WRONG_PASSPHRASE || key == NULL) {
+                    if (had_passphrase && key == SSH2_WRONG_PASSPHRASE) {
+                        ppl_printf("Wrong passphrase\r\n");
+                        key = NULL;
+                    } else {
+                        if (!error)
+                            error = "unknown error";
+                        ppl_logevent("Unable to import key (%s)", error);
+                        ppl_printf("Unable to load key file \"%s\" (%s)\r\n",
+                                   filename_to_str(s->keyfile), error);
+                        key = NULL;
+                        break;
+                    }
+                } else {
+                    char *invalid = ssh_key_invalid(key->key, 0);
+                    if (invalid) {
+                        ppl_printf("Cannot use this private key (%s)\r\n",
+                                   invalid);
+                        ssh2_userauth_free_userkey(key);
+                        sfree(invalid);
+                        key = NULL;
+                        break;
+                    }
+                }
+            }
+
+            if (key) {
+                s->preimported_foreign_key = key;
+                s->publickey_blob = strbuf_new();
+                ssh_key_public_blob(key->key,
+                                    BinarySink_UPCAST(s->publickey_blob));
+                s->publickey_algorithm = dupstr(ssh_key_ssh_id(key->key));
+                s->publickey_comment = dupstr(key->comment);
+                s->privatekey_available = true;
+                s->privatekey_encrypted = false;
+            }
+            sfree(comment);
         } else {
             ppl_logevent("Unable to use this key file (%s)",
                          key_type_to_str(keytype));
@@ -1169,6 +1278,8 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                     /* Key refused. Give up. */
                     pq_push_front(s->ppl.in_pq, pktin);
                     s->type = AUTH_TYPE_PUBLICKEY_OFFER_LOUD;
+                    ssh2_userauth_free_userkey(s->preimported_foreign_key);
+                    s->preimported_foreign_key = NULL;
                     continue; /* process this new message */
                 }
                 ppl_logevent("Offer of public key accepted");
@@ -1225,7 +1336,12 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                     /*
                      * Try decrypting the key.
                      */
-                    key = ppk_load_f(s->keyfile, passphrase, &error);
+                    if (s->preimported_foreign_key) {
+                        key = s->preimported_foreign_key;
+                        s->preimported_foreign_key = NULL;
+                    } else {
+                        key = ppk_load_f(s->keyfile, passphrase, &error);
+                    }
                     if (passphrase) {
                         /* burn the evidence */
                         smemclr(passphrase, strlen(passphrase));

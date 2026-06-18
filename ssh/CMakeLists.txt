@@ -35,6 +35,7 @@ add_library(sshclient STATIC
   $<TARGET_OBJECTS:sshcommon>
   $<TARGET_OBJECTS:all-backends>
   $<TARGET_OBJECTS:logging>)
+target_link_libraries(sshclient PRIVATE keygen)
 
 add_library(sshserver STATIC
   connection1-server.c
