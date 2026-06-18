@@ -527,7 +527,7 @@ static INT_PTR GenericMainDlgProc(HWND hwnd, UINT msg, WPARAM wParam,
       case WM_INITDIALOG:
         pds_initdialog_start(pds, hwnd);
 
-        pds_create_controls(pds, TREE_BASE, IDCX_STDBASE, 3, 246, 258, "");
+        pds_create_controls(pds, TREE_BASE, IDCX_STDBASE, 3, 3, 258, "");
 
         SendMessage(hwnd, WM_SETICON, (WPARAM) ICON_BIG,
                     (LPARAM) LoadIcon(hinst, MAKEINTRESOURCE(IDI_CFGICON)));
