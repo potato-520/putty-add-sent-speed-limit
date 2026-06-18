@@ -2059,6 +2059,9 @@ void setup_config_box(struct controlbox *b, bool midsession,
                       "Auto", I(AUTO),
                       "Force on", I(FORCE_ON),
                       "Force off", I(FORCE_OFF));
+    ctrl_editbox(s, "Maximum bytes sent per second (0 for unlimited):",
+                 NO_SHORTCUT, 20, HELPCTX(no_help),
+                 conf_editbox_handler, I(CONF_send_rate_limit), ED_INT);
 
     s = ctrl_getset(b, "Terminal", "printing", "Remote-controlled printing");
     ctrl_combobox(s, "Printer to send ANSI printer output to:", 'p', 100,

@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 #include "putty.h"
 
 /*
@@ -188,6 +190,19 @@ static void set_port(Conf *conf, int port)
 {
     settings_set_default_port(port);
     conf_set_int(conf, CONF_port, port);
+}
+
+static int cmdline_parse_nonnegative_int(const char *option, const char *value)
+{
+    char *end;
+    long parsed;
+
+    errno = 0;
+    parsed = strtol(value, &end, 10);
+    if (errno || end == value || *end || parsed < 0 || parsed > INT_MAX)
+        cmdline_error("option \"%s\" expects a non-negative integer", option);
+
+    return (int)parsed;
 }
 
 int cmdline_process_param(CmdlineArg *arg, CmdlineArg *nextarg,
@@ -605,6 +620,13 @@ int cmdline_process_param(CmdlineArg *arg, CmdlineArg *nextarg,
         UNAVAILABLE_IN(TOOLTYPE_NONNETWORK);
         SAVEABLE(1);            /* lower priority than -ssh, -telnet, etc */
         conf_set_int(conf, CONF_port, atoi(value));
+    }
+    if (!strcmp(p, "-sendrate") || !strcmp(p, "-send-rate")) {
+        RETURN(2);
+        UNAVAILABLE_IN(TOOLTYPE_FILETRANSFER | TOOLTYPE_NONNETWORK);
+        SAVEABLE(1);
+        conf_set_int(conf, CONF_send_rate_limit,
+                     cmdline_parse_nonnegative_int(p, value));
     }
     if (!strcmp(p, "-pw")) {
         RETURN(2);

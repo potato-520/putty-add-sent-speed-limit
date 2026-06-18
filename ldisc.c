@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <assert.h>
+#include <limits.h>
 
 #include "putty.h"
 #include "terminal.h"
@@ -18,6 +19,19 @@ struct input_chunk {
     struct input_chunk *next;
     InputType type;
     size_t size;
+};
+
+typedef enum LdiscSendEventType {
+    LDISC_SEND_DATA,
+    LDISC_SEND_SPECIAL,
+} LdiscSendEventType;
+
+struct ldisc_send_event {
+    struct ldisc_send_event *next;
+    LdiscSendEventType type;
+    size_t size;
+    SessionSpecialCode code;
+    int arg;
 };
 
 struct Ldisc_tag {
@@ -40,6 +54,12 @@ struct Ldisc_tag {
      */
     bufchain input_queue;
     struct input_chunk *inchunk_head, *inchunk_tail;
+
+    bufchain send_queue;
+    struct ldisc_send_event *send_head, *send_tail;
+    int send_rate_limit;
+    unsigned long send_next_tick;
+    bool send_timer_active;
 
     IdempotentCallback input_queue_callback;
 
@@ -66,6 +86,11 @@ struct Ldisc_tag {
                       (backend_ldisc_option_state(ldisc->backend, LD_EDIT))))
 
 static void ldisc_input_queue_callback(void *ctx);
+static unsigned ldisc_send_interval_ticks(Ldisc *ldisc);
+static void ldisc_send_queue_try(Ldisc *ldisc);
+static void ldisc_send_queue_timer(void *ctx, unsigned long now);
+static void ldisc_queue_data(Ldisc *ldisc, const void *data, size_t len);
+static void ldisc_queue_special(Ldisc *ldisc, SessionSpecialCode code, int arg);
 
 static const TermLineEditorCallbackReceiverVtable ldisc_lineedit_receiver_vt;
 
@@ -81,6 +106,7 @@ Ldisc *ldisc_create(Conf *conf, Terminal *term, Backend *backend, Seat *seat)
     ldisc->seat = seat;
 
     bufchain_init(&ldisc->input_queue);
+    bufchain_init(&ldisc->send_queue);
 
     ldisc->input_queue_callback.fn = ldisc_input_queue_callback;
     ldisc->input_queue_callback.ctx = ldisc;
@@ -104,11 +130,27 @@ Ldisc *ldisc_create(Conf *conf, Terminal *term, Backend *backend, Seat *seat)
 
 void ldisc_configure(Ldisc *ldisc, Conf *conf)
 {
+    int old_send_rate_limit = ldisc->send_rate_limit;
+    int new_send_rate_limit = conf_get_int(conf, CONF_send_rate_limit);
+
     ldisc->telnet_keyboard = conf_get_bool(conf, CONF_telnet_keyboard);
     ldisc->telnet_newline = conf_get_bool(conf, CONF_telnet_newline);
     ldisc->protocol = conf_get_int(conf, CONF_protocol);
     ldisc->localecho = conf_get_int(conf, CONF_localecho);
     ldisc->localedit = conf_get_int(conf, CONF_localedit);
+    if (new_send_rate_limit < 0)
+        new_send_rate_limit = 0;
+    if (old_send_rate_limit != new_send_rate_limit) {
+        ldisc->send_rate_limit = new_send_rate_limit;
+        expire_timer_context(ldisc);
+        ldisc->send_timer_active = false;
+        if (new_send_rate_limit > 0)
+            ldisc->send_next_tick =
+                GETTICKCOUNT() + ldisc_send_interval_ticks(ldisc);
+        else
+            ldisc->send_next_tick = 0;
+        ldisc_send_queue_try(ldisc);
+    }
 
     unsigned flags = 0;
     if (ldisc->protocol == PROT_RAW)
@@ -121,9 +163,15 @@ void ldisc_configure(Ldisc *ldisc, Conf *conf)
 void ldisc_free(Ldisc *ldisc)
 {
     bufchain_clear(&ldisc->input_queue);
+    bufchain_clear(&ldisc->send_queue);
     while (ldisc->inchunk_head) {
         struct input_chunk *oldhead = ldisc->inchunk_head;
         ldisc->inchunk_head = ldisc->inchunk_head->next;
+        sfree(oldhead);
+    }
+    while (ldisc->send_head) {
+        struct ldisc_send_event *oldhead = ldisc->send_head;
+        ldisc->send_head = ldisc->send_head->next;
         sfree(oldhead);
     }
     lineedit_free(ldisc->le);
@@ -131,6 +179,7 @@ void ldisc_free(Ldisc *ldisc)
         ldisc->term->ldisc = NULL;
     if (ldisc->backend)
         backend_provide_ldisc(ldisc->backend, NULL);
+    expire_timer_context(ldisc);
     delete_callbacks_for_context(ldisc);
     sfree(ldisc);
 }
@@ -203,6 +252,124 @@ static void ldisc_input_queue_consume(Ldisc *ldisc, size_t size)
     }
 }
 
+static unsigned ldisc_send_interval_ticks(Ldisc *ldisc)
+{
+    assert(ldisc->send_rate_limit > 0);
+    return 1 + (TICKSPERSEC - 1) / (unsigned)ldisc->send_rate_limit;
+}
+
+static bool ldisc_send_tick_due(unsigned long now, unsigned long due)
+{
+    return now - due < INT_MAX;
+}
+
+static void ldisc_send_event_append(Ldisc *ldisc, struct ldisc_send_event *ev)
+{
+    ev->next = NULL;
+    if (ldisc->send_tail)
+        ldisc->send_tail->next = ev;
+    else
+        ldisc->send_head = ev;
+    ldisc->send_tail = ev;
+}
+
+static void ldisc_send_event_pop(Ldisc *ldisc)
+{
+    struct ldisc_send_event *oldhead = ldisc->send_head;
+    ldisc->send_head = oldhead->next;
+    if (!ldisc->send_head)
+        ldisc->send_tail = NULL;
+    sfree(oldhead);
+}
+
+static void ldisc_send_queue_arm(Ldisc *ldisc, unsigned long now)
+{
+    unsigned long wait;
+
+    if (ldisc->send_timer_active)
+        return;
+
+    wait = ldisc_send_tick_due(now, ldisc->send_next_tick) ?
+        1 : ldisc->send_next_tick - now;
+    ldisc->send_timer_active = true;
+    schedule_timer(wait, ldisc_send_queue_timer, ldisc);
+}
+
+static void ldisc_send_queue_try(Ldisc *ldisc)
+{
+    while (ldisc->send_head && backend_sendok(ldisc->backend)) {
+        struct ldisc_send_event *ev = ldisc->send_head;
+
+        if (ev->type == LDISC_SEND_DATA) {
+            ptrlen pl = bufchain_prefix(&ldisc->send_queue);
+            size_t len;
+
+            assert(pl.len > 0);
+            if (ldisc->send_rate_limit > 0) {
+                unsigned long now = GETTICKCOUNT();
+                if (!ldisc_send_tick_due(now, ldisc->send_next_tick)) {
+                    ldisc_send_queue_arm(ldisc, now);
+                    return;
+                }
+                len = 1;
+            } else {
+                len = ev->size;
+            }
+
+            if (len > pl.len)
+                len = pl.len;
+            backend_send(ldisc->backend, pl.ptr, len);
+            bufchain_consume(&ldisc->send_queue, len);
+            ev->size -= len;
+            if (ldisc->send_rate_limit > 0)
+                ldisc->send_next_tick =
+                    GETTICKCOUNT() + ldisc_send_interval_ticks(ldisc);
+            if (ev->size)
+                return;
+            ldisc_send_event_pop(ldisc);
+        } else {
+            backend_special(ldisc->backend, ev->code, ev->arg);
+            ldisc_send_event_pop(ldisc);
+        }
+    }
+}
+
+static void ldisc_send_queue_timer(void *ctx, unsigned long now)
+{
+    Ldisc *ldisc = (Ldisc *)ctx;
+    ldisc->send_timer_active = false;
+    ldisc_send_queue_try(ldisc);
+}
+
+static void ldisc_queue_data(Ldisc *ldisc, const void *data, size_t len)
+{
+    struct ldisc_send_event *ev;
+
+    if (!len)
+        return;
+
+    ev = snew(struct ldisc_send_event);
+    ev->type = LDISC_SEND_DATA;
+    ev->size = len;
+    ev->code = SS_NOP;
+    ev->arg = 0;
+    bufchain_add(&ldisc->send_queue, data, len);
+    ldisc_send_event_append(ldisc, ev);
+    ldisc_send_queue_try(ldisc);
+}
+
+static void ldisc_queue_special(Ldisc *ldisc, SessionSpecialCode code, int arg)
+{
+    struct ldisc_send_event *ev = snew(struct ldisc_send_event);
+
+    ev->type = LDISC_SEND_SPECIAL;
+    ev->size = 0;
+    ev->code = code;
+    ev->arg = arg;
+    ldisc_send_event_append(ldisc, ev);
+    ldisc_send_queue_try(ldisc);
+}
+
 static void ldisc_lineedit_to_terminal(
     TermLineEditorCallbackReceiver *rcv, ptrlen data)
 {
@@ -215,25 +382,25 @@ static void ldisc_lineedit_to_backend(
     TermLineEditorCallbackReceiver *rcv, ptrlen data)
 {
     Ldisc *ldisc = container_of(rcv, Ldisc, le_rcv);
-    backend_send(ldisc->backend, data.ptr, data.len);
+    ldisc_queue_data(ldisc, data.ptr, data.len);
 }
 
 static void ldisc_lineedit_special(
     TermLineEditorCallbackReceiver *rcv, SessionSpecialCode code, int arg)
 {
     Ldisc *ldisc = container_of(rcv, Ldisc, le_rcv);
-    backend_special(ldisc->backend, code, arg);
+    ldisc_queue_special(ldisc, code, arg);
 }
 
 static void ldisc_lineedit_newline(TermLineEditorCallbackReceiver *rcv)
 {
     Ldisc *ldisc = container_of(rcv, Ldisc, le_rcv);
     if (ldisc->protocol == PROT_RAW)
-        backend_send(ldisc->backend, "\r\n", 2);
+        ldisc_queue_data(ldisc, "\r\n", 2);
     else if (ldisc->protocol == PROT_TELNET && ldisc->telnet_newline)
-        backend_special(ldisc->backend, SS_EOL, 0);
+        ldisc_queue_special(ldisc, SS_EOL, 0);
     else
-        backend_send(ldisc->backend, "\r", 1);
+        ldisc_queue_data(ldisc, "\r", 1);
 }
 
 static const TermLineEditorCallbackReceiverVtable
@@ -246,6 +413,7 @@ ldisc_lineedit_receiver_vt = {
 
 void ldisc_check_sendok(Ldisc *ldisc)
 {
+    ldisc_send_queue_try(ldisc);
     queue_idempotent_callback(&ldisc->input_queue_callback);
 }
 
@@ -354,35 +522,35 @@ static void ldisc_input_queue_callback(void *ctx)
                     switch (c) {
                       case CTRL('M'):
                         if (ldisc->telnet_newline)
-                            backend_special(ldisc->backend, SS_EOL, 0);
+                            ldisc_queue_special(ldisc, SS_EOL, 0);
                         else
-                            backend_send(ldisc->backend, "\r", 1);
+                            ldisc_queue_data(ldisc, "\r", 1);
                         break;
                       case CTRL('?'):
                       case CTRL('H'):
                         if (ldisc->telnet_keyboard) {
-                            backend_special(ldisc->backend, SS_EC, 0);
+                            ldisc_queue_special(ldisc, SS_EC, 0);
                             break;
                         }
                       case CTRL('C'):
                         if (ldisc->telnet_keyboard) {
-                            backend_special(ldisc->backend, SS_IP, 0);
+                            ldisc_queue_special(ldisc, SS_IP, 0);
                             break;
                         }
                       case CTRL('Z'):
                         if (ldisc->telnet_keyboard) {
-                            backend_special(ldisc->backend, SS_SUSP, 0);
+                            ldisc_queue_special(ldisc, SS_SUSP, 0);
                             break;
                         }
 
                       default:
-                        backend_send(ldisc->backend, &c, 1);
+                        ldisc_queue_data(ldisc, &c, 1);
                         break;
                     }
                 }
                 ldisc_input_queue_consume(ldisc, buf - start);
             } else {
-                backend_send(ldisc->backend, buf, len);
+                ldisc_queue_data(ldisc, buf, len);
                 ldisc_input_queue_consume(ldisc, len);
             }
         }

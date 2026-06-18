@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <limits.h>
 
 #include "putty.h"
 #include "ssh.h"
@@ -149,6 +150,8 @@ static void usage(void)
     printf("            run 'command' before making network connection\n");
     printf("  -sercfg configuration-string (e.g. 19200,8,n,1,X)\n");
     printf("            Specify the serial configuration (serial only)\n");
+    printf("  -sendrate bytes-per-second\n");
+    printf("            Limit local input send rate (0 for unlimited)\n");
     printf("The following options only apply to SSH connections:\n");
     printf("  -pwfile file   login with password read from specified file\n");
     printf("  -D [listen-IP:]listen-port\n");
@@ -201,6 +204,10 @@ static void version(void)
     exit(0);
 }
 
+static size_t stdin_send_backlog(void);
+static void stdin_send_queue_data(const void *data, size_t len);
+static void stdin_send_queue_special(SessionSpecialCode code, int arg);
+
 size_t stdin_gotdata(struct handle *h, const void *data, size_t len, int err)
 {
     if (err) {
@@ -216,13 +223,11 @@ size_t stdin_gotdata(struct handle *h, const void *data, size_t len, int err)
 
     noise_ultralight(NOISE_SOURCE_IOLEN, len);
     if (backend_connected(backend)) {
-        if (len > 0) {
-            backend_send(backend, data, len);
-            return backend_sendbuffer(backend);
-        } else {
-            backend_special(backend, SS_EOF, 0);
-            return 0;
-        }
+        if (len > 0)
+            stdin_send_queue_data(data, len);
+        else
+            stdin_send_queue_special(SS_EOF, 0);
+        return stdin_send_backlog();
     } else
         return 0;
 }
@@ -262,7 +267,150 @@ const unsigned cmdline_tooltype =
     TOOLTYPE_HOST_ARG_PROTOCOL_PREFIX |
     TOOLTYPE_HOST_ARG_FROM_LAUNCHABLE_LOAD;
 
+typedef enum PlinkSendEventType {
+    PLINK_SEND_DATA,
+    PLINK_SEND_SPECIAL,
+} PlinkSendEventType;
+
+struct plink_send_event {
+    struct plink_send_event *next;
+    PlinkSendEventType type;
+    size_t size;
+    SessionSpecialCode code;
+    int arg;
+};
+
 static bool sending;
+static bufchain stdin_send_queue;
+static struct plink_send_event *stdin_send_head, *stdin_send_tail;
+static int stdin_send_rate_limit;
+static unsigned long stdin_send_next_tick;
+static bool stdin_send_timer_active;
+
+static unsigned stdin_send_interval_ticks(void)
+{
+    assert(stdin_send_rate_limit > 0);
+    return 1 + (TICKSPERSEC - 1) / (unsigned)stdin_send_rate_limit;
+}
+
+static bool stdin_send_tick_due(unsigned long now, unsigned long due)
+{
+    return now - due < INT_MAX;
+}
+
+static size_t stdin_send_backlog(void)
+{
+    return backend_sendbuffer(backend) + bufchain_size(&stdin_send_queue);
+}
+
+static void stdin_send_event_append(struct plink_send_event *ev)
+{
+    ev->next = NULL;
+    if (stdin_send_tail)
+        stdin_send_tail->next = ev;
+    else
+        stdin_send_head = ev;
+    stdin_send_tail = ev;
+}
+
+static void stdin_send_event_pop(void)
+{
+    struct plink_send_event *oldhead = stdin_send_head;
+    stdin_send_head = oldhead->next;
+    if (!stdin_send_head)
+        stdin_send_tail = NULL;
+    sfree(oldhead);
+}
+
+static void stdin_send_queue_timer(void *ctx, unsigned long now);
+
+static void stdin_send_queue_arm(unsigned long now)
+{
+    unsigned long wait;
+
+    if (stdin_send_timer_active)
+        return;
+
+    wait = stdin_send_tick_due(now, stdin_send_next_tick) ?
+        1 : stdin_send_next_tick - now;
+    stdin_send_timer_active = true;
+    schedule_timer(wait, stdin_send_queue_timer, NULL);
+}
+
+static void stdin_send_queue_try(void)
+{
+    while (stdin_send_head && backend_connected(backend) &&
+           backend_sendok(backend)) {
+        struct plink_send_event *ev = stdin_send_head;
+
+        if (ev->type == PLINK_SEND_DATA) {
+            ptrlen pl = bufchain_prefix(&stdin_send_queue);
+            size_t len;
+
+            assert(pl.len > 0);
+            if (stdin_send_rate_limit > 0) {
+                unsigned long now = GETTICKCOUNT();
+                if (!stdin_send_tick_due(now, stdin_send_next_tick)) {
+                    stdin_send_queue_arm(now);
+                    return;
+                }
+                len = 1;
+            } else {
+                len = ev->size;
+            }
+
+            if (len > pl.len)
+                len = pl.len;
+            backend_send(backend, pl.ptr, len);
+            bufchain_consume(&stdin_send_queue, len);
+            ev->size -= len;
+            if (stdin_send_rate_limit > 0)
+                stdin_send_next_tick =
+                    GETTICKCOUNT() + stdin_send_interval_ticks();
+            if (ev->size)
+                return;
+            stdin_send_event_pop();
+        } else {
+            backend_special(backend, ev->code, ev->arg);
+            stdin_send_event_pop();
+        }
+    }
+}
+
+static void stdin_send_queue_timer(void *ctx, unsigned long now)
+{
+    stdin_send_timer_active = false;
+    stdin_send_queue_try();
+}
+
+static void stdin_send_queue_data(const void *data, size_t len)
+{
+    struct plink_send_event *ev;
+
+    if (!len)
+        return;
+
+    ev = snew(struct plink_send_event);
+    ev->type = PLINK_SEND_DATA;
+    ev->size = len;
+    ev->code = SS_NOP;
+    ev->arg = 0;
+    bufchain_add(&stdin_send_queue, data, len);
+    stdin_send_event_append(ev);
+    stdin_send_queue_try();
+}
+
+static void stdin_send_queue_special(SessionSpecialCode code, int arg)
+{
+    struct plink_send_event *ev = snew(struct plink_send_event);
+
+    ev->type = PLINK_SEND_SPECIAL;
+    ev->size = 0;
+    ev->code = code;
+    ev->arg = arg;
+    stdin_send_event_append(ev);
+    stdin_send_queue_try();
+}
 
 static bool plink_mainloop_pre(void *vctx, const HANDLE **extra_handles,
                                size_t *n_extra_handles)
@@ -278,8 +426,10 @@ static bool plink_mainloop_pre(void *vctx, const HANDLE **extra_handles,
 
 static bool plink_mainloop_post(void *vctx, size_t extra_handle_index)
 {
+    stdin_send_queue_try();
+
     if (sending)
-        handle_unthrottle(stdin_handle, backend_sendbuffer(backend));
+        handle_unthrottle(stdin_handle, stdin_send_backlog());
 
     if (!backend_connected(backend) &&
         handle_backlog(stdout_handle) + handle_backlog(stderr_handle) == 0)
@@ -410,6 +560,13 @@ int main(int argc, char **argv)
      * Perform command-line overrides on session configuration.
      */
     cmdline_run_saved(conf);
+
+    stdin_send_rate_limit = conf_get_int(conf, CONF_send_rate_limit);
+    if (stdin_send_rate_limit < 0)
+        stdin_send_rate_limit = 0;
+    if (stdin_send_rate_limit > 0)
+        stdin_send_next_tick =
+            GETTICKCOUNT() + stdin_send_interval_ticks();
 
     /*
      * Apply subsystem status.
@@ -550,6 +707,7 @@ int main(int argc, char **argv)
     main_thread_id = GetCurrentThreadId();
 
     sending = false;
+    bufchain_init(&stdin_send_queue);
 
     cli_main_loop(plink_mainloop_pre, plink_mainloop_post, NULL);
 
