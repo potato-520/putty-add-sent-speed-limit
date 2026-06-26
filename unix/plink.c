@@ -532,8 +532,11 @@ static void stdin_send_queue_try(void)
             if (stdin_send_rate_limit > 0)
                 stdin_send_next_tick =
                     GETTICKCOUNT() + stdin_send_interval_ticks();
-            if (ev->size)
+            if (ev->size) {
+                if (stdin_send_rate_limit > 0)
+                    stdin_send_queue_arm(GETTICKCOUNT());
                 return;
+            }
             stdin_send_event_pop();
         } else {
             backend_special(backend, ev->code, ev->arg);

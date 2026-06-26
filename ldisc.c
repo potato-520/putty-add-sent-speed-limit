@@ -324,8 +324,11 @@ static void ldisc_send_queue_try(Ldisc *ldisc)
             if (ldisc->send_rate_limit > 0)
                 ldisc->send_next_tick =
                     GETTICKCOUNT() + ldisc_send_interval_ticks(ldisc);
-            if (ev->size)
+            if (ev->size) {
+                if (ldisc->send_rate_limit > 0)
+                    ldisc_send_queue_arm(ldisc, GETTICKCOUNT());
                 return;
+            }
             ldisc_send_event_pop(ldisc);
         } else {
             backend_special(ldisc->backend, ev->code, ev->arg);
