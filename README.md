@@ -1,6 +1,10 @@
 # PuTTY 本地增强版
 
-本仓库基于官方 PuTTY 源码改造，增加了“本地输入发送限速”和“SSH 外部私钥自动内存导入”能力。前者用于缓解嵌入式开发板串口输入缓冲较小、接收任务优先级较低时，复制粘贴大段文本导致接收端丢数据的问题；后者用于让 putty/plink 直接接受 OpenSSH/ssh.com 格式的 SSH2 私钥，减少手动转换 PPK 的操作。
+本仓库基于官方 PuTTY 源码改造，在官方版本基础上进行了定制化改进，主要增加了以下能力：
+1. **本地输入发送限速**：用于缓解嵌入式开发板串口输入缓冲较小、接收任务优先级较低时，复制粘贴大段文本导致接收端丢数据的问题；
+2. **SSH 外部私钥自动内存导入**：让 putty/plink 直接接受 OpenSSH/ssh.com 格式的 SSH2 私钥，减少手动转换 PPK 的操作；
+3. **自动日志目录配置**：支持配置自动保存日志文件的目录，方便集中管理会话日志；
+4. **关闭窗口免确认**：关闭窗口时不再弹出 `Are you sure you want to close this session?` 确认对话框，直接关闭窗口。
 
 本文件是本仓库的主 README，重点说明本地增强功能。官方原版源码说明保留在 [`README`](README)。
 
@@ -10,6 +14,7 @@
 - 版本来源：源码中的 `version.h`
 - 本次功能提交：`7243950 Add configurable send rate limit`
 - SSH 外部私钥导入：putty/plink 连接时自动识别 OpenSSH PEM、OpenSSH new、ssh.com SSH2 私钥并在内存中导入
+- 自动日志保存与窗口直接关闭：2026年7月定制化修改提交
 
 - 官方原版 README：[`README`](README)
 
@@ -84,18 +89,32 @@ plink -ssh user@example.com -i ~/.ssh/id_ed25519
 
 需要注意：对于加密的 OpenSSH/ssh.com 私钥，为了在查询 Pageant 前生成公钥 blob 并保持“只尝试与配置 keyfile 匹配的 Pageant key”的行为，程序会比 PPK 路径更早提示输入私钥口令。
 
+### 4. 自动日志目录配置 (Auto-log directory)
+
+在 PuTTY 配置界面的 `Session -> Logging` 下，新增了 `Auto-log directory (empty to disable)` 配置项。
+如果指定了目录（例如 `/var/log/putty` 或 `D:\putty_logs`），PuTTY 将自动在此目录下创建格式为 `&h_&Y-&m-&d_&t.log`（`主机名_年-月-日_时间.log`）的会话日志，采用 ASCII 格式并默认自动覆盖同名文件。若不指定则保持原有行为。
+该配置对应的 session 保存键名为 `AutoLogDir`。
+
+### 5. 关闭窗口不再弹出确认对话框
+
+当关闭终端窗口（如点击关闭按钮、按 `Alt-F4`）时，直接销毁窗口，不再弹出 `Are you sure you want to close this session?` 确认对话框。
+
 ## 修改过的源码文件
 
 | 文件 | 作用 |
 | --- | --- |
-| `conf.h` | 新增 `CONF_send_rate_limit` 配置项，默认值为 `0`，保存键为 `SendRateLimit` |
-| `config.c` | 在 PuTTY GUI 的 Terminal / Line discipline options 页面增加输入框 |
-| `cmdline.c` | 增加 `-sendrate` / `-send-rate` 参数解析，并校验必须为非负整数 |
-| `ldisc.c` | PuTTY GUI 本地输入路径增加有序限速发送队列 |
+| `conf.h` | 新增 `CONF_send_rate_limit` (限速) 和 `CONF_auto_log_dir` (自动日志目录) 配置项 |
+| `config.c` | 在 GUI 界面增加限速和自动日志目录的输入框 |
+| `cmdline.c` | 增加 `-sendrate` / `-send-rate` 参数解析与合法性校验 |
+| `logging.c` | 在日志初始化和重配置时，自动应用 `CONF_auto_log_dir` 策略 |
+| `ldisc.c` | 本地输入路径增加有序限速发送队列 |
 | `windows/plink.c` | Windows plink stdin 发送路径增加限速队列 |
-| `unix/plink.c` | Unix plink stdin / BRK 发送路径增加限速队列 |
-| `ssh/userauth2-client.c` | SSH2 用户认证路径增加 OpenSSH/ssh.com 私钥自动识别与内存导入 |
-| `ssh/CMakeLists.txt` | 让 SSH client 链接现有 `keygen` 库以复用 `import.c` 导入能力 |
+| `unix/plink.c` | Unix plink stdin 发送路径增加限速队列 |
+| `ssh/userauth2-client.c` | SSH2 认证路径增加外部私钥自动识别与内存导入 |
+| `ssh/CMakeLists.txt` | 让 SSH client 链接 `keygen` 库以复用私钥导入能力 |
+| `windows/window.c` | 移除 `WM_CLOSE` 中的确认弹窗逻辑，直接关闭销毁窗口 |
+| `unix/window.c` | 移除 Gtk `delete_window` 里的确认弹窗逻辑，直接关闭窗口 |
+| `test/test_conf.c` | 新增 `AutoLogDir` 配置的测试用例 |
 
 ## 限速原理
 
