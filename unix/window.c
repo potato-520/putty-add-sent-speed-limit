@@ -649,32 +649,6 @@ static void warn_on_close_callback(void *vctx, int result)
  */
 gint delete_window(GtkWidget *widget, GdkEvent *event, GtkFrontend *inst)
 {
-    if (!inst->exited && conf_get_bool(inst->conf, CONF_warn_on_close)) {
-        /*
-         * We're not going to exit right now. We must put up a
-         * warn-on-close dialog, unless one already exists, in which
-         * case we'll just re-emphasise that one.
-         */
-        if (!find_and_raise_dialog(inst, DIALOG_SLOT_WARN_ON_CLOSE)) {
-            char *title = dupcat(appname, " Exit Confirmation");
-            char *msg, *additional = NULL;
-            if (inst->backend && inst->backend->vt->close_warn_text) {
-                additional = inst->backend->vt->close_warn_text(inst->backend);
-            }
-            msg = dupprintf("Are you sure you want to close this session?%s%s",
-                            additional ? "\n" : "",
-                            additional ? additional : "");
-            GtkWidget *dialog = create_message_box(
-                inst->window, title, msg,
-                string_width("Most of the width of the above text"),
-                false, &buttons_yn, warn_on_close_callback, inst);
-            register_dialog(&inst->seat, DIALOG_SLOT_WARN_ON_CLOSE, dialog);
-            sfree(title);
-            sfree(msg);
-            sfree(additional);
-        }
-        return true;
-    }
     return false;
 }
 

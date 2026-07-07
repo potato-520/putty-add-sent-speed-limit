@@ -846,6 +846,11 @@ CONF_OPTION(logfilename,
     VALUE_TYPE(FILENAME),
     SAVE_KEYWORD("LogFileName"),
 )
+CONF_OPTION(auto_log_dir,
+    VALUE_TYPE(STR),
+    DEFAULT_STR(""),
+    SAVE_KEYWORD("AutoLogDir"),
+)
 CONF_OPTION(logtype,
     VALUE_TYPE(INT),
     DEFAULT_INT(LGTYP_NONE),

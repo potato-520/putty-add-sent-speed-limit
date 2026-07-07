@@ -1993,6 +1993,9 @@ void setup_config_box(struct controlbox *b, bool midsession,
     ctrl_text(s, "(Log file name can contain &Y, &M, &D for date,"
               " &T for time, &H for host name, and &P for port number)",
               HELPCTX(logging_filename));
+    ctrl_editbox(s, "Auto-log directory (empty to disable):", 'y',
+                 100, HELPCTX(logging_filename),
+                 conf_editbox_handler, I(CONF_auto_log_dir), ED_STR);
     ctrl_radiobuttons(s, "What to do if the log file already exists:", 'e', 1,
                       HELPCTX(logging_exists),
                       conf_radiobutton_handler, I(CONF_logxfovr),

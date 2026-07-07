@@ -810,6 +810,7 @@ void test_simple(void)
                         FQ_DEFAULT, 0, FQ_ANTIALIASED, 1, FQ_NONANTIALIASED, 2,
                         FQ_CLEARTYPE, 3, -1);
     test_file_simple(CONF_logfilename, "LogFileName");
+    test_str_simple(CONF_auto_log_dir, "AutoLogDir", "");
     test_int_translated(CONF_logtype, "LogType", LGTYP_NONE,
                         LGTYP_NONE, 0, LGTYP_ASCII, 1, LGTYP_DEBUG, 2,
                         LGTYP_PACKETS, 3, LGTYP_SSHRAW, 4, -1);

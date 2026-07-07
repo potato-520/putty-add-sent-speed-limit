@@ -379,6 +379,33 @@ void log_packet(LogContext *ctx, int direction, int type,
     logflush(ctx);
 }
 
+static void log_apply_auto_dir(Conf *conf)
+{
+    const char *auto_dir = conf_get_str(conf, CONF_auto_log_dir);
+    if (auto_dir && auto_dir[0] != '\0') {
+        char sep = '/';
+#ifdef _WIN32
+        sep = '\\';
+#endif
+        size_t len = strlen(auto_dir);
+        char *tmpl;
+        if (len > 0 && (auto_dir[len - 1] == '/' || auto_dir[len - 1] == '\\')) {
+            tmpl = dupprintf("%s&h_&Y-&m-&d_&t.log", auto_dir);
+        } else {
+            tmpl = dupprintf("%s%c&h_&Y-&m-&d_&t.log", auto_dir, sep);
+        }
+        Filename *fn = filename_from_str(tmpl);
+        conf_set_filename(conf, CONF_logfilename, fn);
+        filename_free(fn);
+        sfree(tmpl);
+
+        if (conf_get_int(conf, CONF_logtype) == LGTYP_NONE) {
+            conf_set_int(conf, CONF_logtype, LGTYP_ASCII);
+        }
+        conf_set_int(conf, CONF_logxfovr, LGXF_OVR);
+    }
+}
+
 LogContext *log_init(LogPolicy *lp, Conf *conf)
 {
     LogContext *ctx = snew(LogContext);
@@ -386,6 +413,7 @@ LogContext *log_init(LogPolicy *lp, Conf *conf)
     ctx->state = L_CLOSED;
     ctx->lp = lp;
     ctx->conf = conf_copy(conf);
+    log_apply_auto_dir(ctx->conf);
     ctx->logtype = conf_get_int(ctx->conf, CONF_logtype);
     ctx->currlogfilename = NULL;
     bufchain_init(&ctx->queue);
@@ -405,11 +433,13 @@ void log_free(LogContext *ctx)
 void log_reconfig(LogContext *ctx, Conf *conf)
 {
     bool reset_logging;
+    Conf *new_conf = conf_copy(conf);
+    log_apply_auto_dir(new_conf);
 
     if (!filename_equal(conf_get_filename(ctx->conf, CONF_logfilename),
-                        conf_get_filename(conf, CONF_logfilename)) ||
+                        conf_get_filename(new_conf, CONF_logfilename)) ||
         conf_get_int(ctx->conf, CONF_logtype) !=
-        conf_get_int(conf, CONF_logtype))
+        conf_get_int(new_conf, CONF_logtype))
         reset_logging = true;
     else
         reset_logging = false;
@@ -418,7 +448,7 @@ void log_reconfig(LogContext *ctx, Conf *conf)
         logfclose(ctx);
 
     conf_free(ctx->conf);
-    ctx->conf = conf_copy(conf);
+    ctx->conf = new_conf;
 
     ctx->logtype = conf_get_int(ctx->conf, CONF_logtype);
 
