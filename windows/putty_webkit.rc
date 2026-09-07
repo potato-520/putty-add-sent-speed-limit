@@ -1,0 +1,28 @@
+#include "rcstuff.h"
+#include "putty-rc.h"
+
+#define APPNAME "PuTTY-WebKit"
+#define APPDESC "Modern Web-based PuTTY / ConPTY Terminal"
+
+IDI_MAINICON ICON "putty.ico"
+IDI_CFGICON ICON "puttycfg.ico"
+
+#include "help.rc2"
+#include "putty-common.rc2"
+
+#ifndef NO_MANIFESTS
+1 RT_MANIFEST "putty.mft"
+#endif /* NO_MANIFESTS */
+
+#define IDR_WEB_INDEX_HTML          2001
+#define IDR_WEB_XTERM_JS            2002
+#define IDR_WEB_XTERM_CSS           2003
+#define IDR_WEB_FIT_ADDON_JS        2004
+#define IDR_WEB_WEBLINKS_ADDON_JS   2005
+
+IDR_WEB_INDEX_HTML          RCDATA "webkit/web/index.html"
+IDR_WEB_XTERM_JS            RCDATA "webkit/web/xterm.js"
+IDR_WEB_XTERM_CSS           RCDATA "webkit/web/xterm.css"
+IDR_WEB_FIT_ADDON_JS        RCDATA "webkit/web/xterm-addon-fit.js"
+IDR_WEB_WEBLINKS_ADDON_JS   RCDATA "webkit/web/xterm-addon-web-links.js"
+

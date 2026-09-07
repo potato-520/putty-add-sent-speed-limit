@@ -207,6 +207,9 @@ static void config_host_handler(dlgcontrol *ctrl, dlgparam *dlg,
              */
             dlg_label_change(ctrl, dlg, "Serial line");
             dlg_editbox_set(ctrl, dlg, conf_get_str(conf, CONF_serline));
+        } else if (conf_get_int(conf, CONF_protocol) == PROT_CONPTY) {
+            dlg_label_change(ctrl, dlg, "WSL Distro (blank for default)");
+            dlg_editbox_set(ctrl, dlg, conf_get_str(conf, CONF_host));
         } else {
             dlg_label_change(ctrl, dlg, HOST_BOX_TITLE);
             dlg_editbox_set(ctrl, dlg, conf_get_str(conf, CONF_host));
@@ -240,6 +243,9 @@ static void config_port_handler(dlgcontrol *ctrl, dlgparam *dlg,
              */
             dlg_label_change(ctrl, dlg, "Speed");
             sprintf(buf, "%d", conf_get_int(conf, CONF_serspeed));
+        } else if (conf_get_int(conf, CONF_protocol) == PROT_CONPTY) {
+            dlg_label_change(ctrl, dlg, "(Port N/A)");
+            buf[0] = '\0';
         } else {
             dlg_label_change(ctrl, dlg, PORT_BOX_TITLE);
             if (conf_get_int(conf, CONF_port) != 0)

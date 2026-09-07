@@ -48,6 +48,22 @@ static bool init_conpty_api(void)
 
 static void conpty_terminate(ConPTY *conpty)
 {
+    /* Close pseudo-console first to signal ConPTY to shut down */
+    if (conpty->pseudoconsole != INVALID_HANDLE_VALUE) {
+        p_ClosePseudoConsole(conpty->pseudoconsole);
+        conpty->pseudoconsole = INVALID_HANDLE_VALUE;
+    }
+
+    if (conpty->subprocess) {
+        delete_handle_wait(conpty->subprocess);
+        conpty->subprocess = NULL;
+    }
+    if (conpty->hprocess != INVALID_HANDLE_VALUE) {
+        TerminateProcess(conpty->hprocess, 0);
+        CloseHandle(conpty->hprocess);
+        conpty->hprocess = INVALID_HANDLE_VALUE;
+    }
+
     if (conpty->out) {
         handle_free(conpty->out);
         conpty->out = NULL;
@@ -63,15 +79,6 @@ static void conpty_terminate(ConPTY *conpty)
     if (conpty->inpipe != INVALID_HANDLE_VALUE) {
         CloseHandle(conpty->inpipe);
         conpty->inpipe = INVALID_HANDLE_VALUE;
-    }
-    if (conpty->subprocess) {
-        delete_handle_wait(conpty->subprocess);
-        conpty->subprocess = NULL;
-        conpty->hprocess = INVALID_HANDLE_VALUE;
-    }
-    if (conpty->pseudoconsole != INVALID_HANDLE_VALUE) {
-        p_ClosePseudoConsole(conpty->pseudoconsole);
-        conpty->pseudoconsole = INVALID_HANDLE_VALUE;
     }
 }
 
@@ -89,6 +96,9 @@ static void conpty_process_wait_callback(void *vctx)
     if (conpty->subprocess) {
         delete_handle_wait(conpty->subprocess);
         conpty->subprocess = NULL;
+    }
+    if (conpty->hprocess != INVALID_HANDLE_VALUE) {
+        CloseHandle(conpty->hprocess);
         conpty->hprocess = INVALID_HANDLE_VALUE;
     }
 
@@ -245,7 +255,13 @@ static char *conpty_init(const BackendVtable *vt, Seat *seat,
         if (*conf_cmd) {
             command = dup_mb_to_wc(utf8 ? CP_UTF8 : CP_ACP, conf_cmd);
         } else {
-            char *cmd = dupcat(get_system_dir(), "\\cmd.exe");
+            const char *h = conf_get_str(conf, CONF_host);
+            char *cmd;
+            if (h && *h && stricmp(h, "wsl") && stricmp(h, "localhost") && stricmp(h, "127.0.0.1")) {
+                cmd = dupprintf("wsl.exe -d %s ~", h);
+            } else {
+                cmd = dupstr("wsl.exe ~");
+            }
             command = dup_mb_to_wc(CP_ACP, cmd);
             sfree(cmd);
         }
@@ -431,8 +447,9 @@ const BackendVtable conpty_backend = {
     .provide_ldisc = conpty_provide_ldisc,
     .unthrottle = conpty_unthrottle,
     .cfg_info = conpty_cfg_info,
-    .id = "conpty",
-    .displayname_tc = "ConPTY",
-    .displayname_lc = "ConPTY", /* proper name, so capitalise it anyway */
-    .protocol = -1,
+    .id = "wsl",
+    .displayname_tc = "WSL",
+    .displayname_lc = "wsl",
+    .protocol = PROT_CONPTY,
+    .default_port = 0,
 };

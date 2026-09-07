@@ -27,8 +27,8 @@ if [[ ${#targets[@]} -eq 0 ]]; then
     targets=(putty plink)
 fi
 
-"$cmake_exe" -S "$src_win" -B "$build_win" -G "Visual Studio 17 2022" -A x64
-"$cmake_exe" --build "$build_win" --config Release --target "${targets[@]}"
+"$cmake_exe" -S "$src_win" -B "$build_win" -G "Visual Studio 17 2022" -A x64 < /dev/null
+"$cmake_exe" --build "$build_win" --config Release --target "${targets[@]}" < /dev/null
 
 echo
 echo "Built targets: ${targets[*]}"

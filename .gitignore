@@ -13,6 +13,8 @@ cmake_install.cmake
 /shipped.txt
 *.dir/
 *.lib
+!windows/webkit/lib/
+!windows/webkit/lib/**
 .dirstamp
 .deps
 .DS_Store
