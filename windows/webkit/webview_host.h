@@ -13,6 +13,7 @@ typedef void (*WebViewMessageCallback)(HWND hwnd, const char *message, void *use
 bool webview_host_init(HWND hwnd, const wchar_t *html_path,
                        WebViewMessageCallback on_message, void *userdata);
 void webview_host_resize(HWND hwnd);
+void webview_host_focus(HWND hwnd);
 void webview_host_close(HWND hwnd);
 void webview_host_send_to_window(HWND hwnd, const char *msg);
 void webview_host_send_session_binary_to_window(HWND hwnd, char type, int session_id,

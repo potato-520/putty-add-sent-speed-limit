@@ -85,6 +85,15 @@ void webview_host_resize(HWND hwnd)
     }
 }
 
+void webview_host_focus(HWND hwnd)
+{
+    if (!hwnd) return;
+    auto it = s_windows.find(hwnd);
+    if (it != s_windows.end() && it->second->controller) {
+        it->second->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    }
+}
+
 void webview_host_close(HWND hwnd)
 {
     if (!hwnd) return;

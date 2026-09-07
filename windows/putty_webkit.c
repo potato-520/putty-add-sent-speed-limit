@@ -233,6 +233,15 @@ typedef struct WebKitSession {
     int send_rate_limit;
     unsigned long send_next_tick;
     bool send_timer_active;
+    FILE *log_fp;
+    bool is_logging;
+    bool log_enabled;
+    char log_filename[MAX_PATH];
+    bool auto_reconnect;
+    bool reconnect_timer_active;
+    int reconnect_countdown;
+    unsigned long reconnect_next_tick;
+    unsigned long reconnect_target_tick;
     struct WebKitSession *next;
 } WebKitSession;
 
@@ -410,6 +419,254 @@ static const SeatVtable webkit_seat_vt = {
     .get_cursor_position = nullseat_get_cursor_position,
 };
 
+static void session_stop_log(WebKitSession *sess)
+{
+    if (!sess) return;
+    if (sess->log_fp) {
+        fclose(sess->log_fp);
+        sess->log_fp = NULL;
+    }
+    sess->log_enabled = false;
+    sess->is_logging = false;
+    sess->log_filename[0] = '\0';
+    dbg_log("Stopped logging session %d", sess->id);
+    if (sess->hwnd) {
+        char notify[64];
+        snprintf(notify, sizeof(notify), "L%d:0", sess->id);
+        webview_host_send_to_window(sess->hwnd, notify);
+    }
+}
+
+static bool session_start_log(WebKitSession *sess)
+{
+    if (!sess) return false;
+    if (sess->log_fp) {
+        fclose(sess->log_fp);
+        sess->log_fp = NULL;
+    }
+
+    sess->log_enabled = true;
+
+    wchar_t log_dir[MAX_PATH] = {0};
+    const char *auto_dir = conf_get_str(sess->cfg, CONF_auto_log_dir);
+    if (auto_dir && auto_dir[0] != '\0') {
+        MultiByteToWideChar(CP_UTF8, 0, auto_dir, -1, log_dir, MAX_PATH);
+    } else {
+        wchar_t exe_path[MAX_PATH];
+        GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+        wchar_t *last_slash = wcsrchr(exe_path, L'\\');
+        if (last_slash) *last_slash = L'\0';
+        _snwprintf(log_dir, MAX_PATH, L"%s\\logs", exe_path);
+    }
+
+    bool dir_ok = create_directory_recursive(log_dir);
+    if (!dir_ok) {
+        wchar_t appdata[MAX_PATH];
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
+            _snwprintf(log_dir, MAX_PATH, L"%s\\PuTTY-WebKit\\logs", appdata);
+            create_directory_recursive(log_dir);
+        }
+    }
+
+    int proto = conf_get_int(sess->cfg, CONF_protocol);
+    const char *type_name = "Session";
+    if (proto == PROT_SSH) type_name = "SSH";
+    else if (proto == PROT_SERIAL) type_name = "Serial";
+    else if (proto == PROT_CONPTY) type_name = "WSL";
+    else if (proto == PROT_TELNET) type_name = "Telnet";
+    else if (proto == PROT_RAW) type_name = "Raw";
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    char filename_utf8[MAX_PATH];
+    snprintf(filename_utf8, sizeof(filename_utf8), "%s_%04d%02d%02d_%02d%02d%02d.log",
+             type_name,
+             st.wYear, st.wMonth, st.wDay,
+             st.wHour, st.wMinute, st.wSecond);
+
+    wchar_t w_filename[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, filename_utf8, -1, w_filename, MAX_PATH);
+
+    wchar_t fullpath[MAX_PATH];
+    _snwprintf(fullpath, MAX_PATH, L"%s\\%s", log_dir, w_filename);
+
+    FILE *fp = _wfopen(fullpath, L"ab");
+    if (!fp) {
+        dbg_log("Failed to open log file %ls", fullpath);
+        return false;
+    }
+
+    sess->log_fp = fp;
+    sess->is_logging = true;
+    strncpy(sess->log_filename, filename_utf8, sizeof(sess->log_filename) - 1);
+
+    fprintf(fp, "=~=~=~=~=~=~=~=~=~=~=~= PuTTY-WebKit log %04d.%02d.%02d %02d:%02d:%02d =~=~=~=~=~=~=~=~=~=~=\r\n",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    fflush(fp);
+
+    dbg_log("Started logging session %d to %s", sess->id, filename_utf8);
+
+    if (sess->hwnd) {
+        char notify[MAX_PATH + 32];
+        snprintf(notify, sizeof(notify), "L%d:1:%s", sess->id, filename_utf8);
+        webview_host_send_to_window(sess->hwnd, notify);
+    }
+    return true;
+}
+
+static void session_toggle_log(WebKitSession *sess)
+{
+    if (!sess) return;
+    if (sess->log_enabled) {
+        session_stop_log(sess);
+    } else {
+        session_start_log(sess);
+    }
+}
+
+static void session_write_terminal(WebKitSession *sess, const char *text)
+{
+    if (!sess || !text) return;
+    size_t len = strlen(text);
+    session_record_output(sess, text, len);
+    if (sess->log_fp) {
+        fwrite(text, 1, len, sess->log_fp);
+        fflush(sess->log_fp);
+    }
+    if (sess->hwnd) {
+        webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, text, len);
+    }
+}
+
+static void session_reconnect(WebKitSession *sess);
+static void session_schedule_reconnect(WebKitSession *sess);
+
+static void session_reconnect_timer(void *ctx, unsigned long now)
+{
+    WebKitSession *sess = container_of((bool *)ctx, WebKitSession, reconnect_timer_active);
+    if (!sess->reconnect_timer_active)
+        return;
+    sess->reconnect_timer_active = false;
+    if (!sess->auto_reconnect)
+        return;
+    session_reconnect(sess);
+}
+
+static void session_schedule_reconnect(WebKitSession *sess)
+{
+    if (!sess || !sess->auto_reconnect)
+        return;
+    if (sess->reconnect_timer_active)
+        return;
+
+    sess->reconnect_timer_active = true;
+    sess->reconnect_countdown = 5;
+    unsigned long now = GETTICKCOUNT();
+    sess->reconnect_next_tick = now + 1 * TICKSPERSEC;
+    sess->reconnect_target_tick = now + 5 * TICKSPERSEC;
+
+    session_write_terminal(sess, "\r\n\x1b[1;33m[自动重连] 5 秒后尝试重新连接...\x1b[0m");
+    schedule_timer(5 * TICKSPERSEC, session_reconnect_timer, &sess->reconnect_timer_active);
+}
+
+static void session_reconnect(WebKitSession *sess)
+{
+    if (!sess) return;
+    if (sess->backend && backend_connected(sess->backend))
+    if (!sess->auto_reconnect)
+        return;
+
+    session_write_terminal(sess, "\r\x1b[2K\x1b[1;36m[自动重连] 正在尝试连接...\x1b[0m\r\n");
+
+    if (sess->backend) {
+        backend_free(sess->backend);
+        sess->backend = NULL;
+        sess->wgs.backend = NULL;
+    }
+
+    bufchain_clear(&sess->send_queue);
+    sess->send_timer_active = false;
+
+    sess->wgs.cmdline_get_passwd_state = cmdline_get_passwd_input_state_new;
+    seat_set_trust_status(&sess->wgs.seat, true);
+
+    int proto = conf_get_int(sess->cfg, CONF_protocol);
+    const struct BackendVtable *vt = backend_vt_from_proto(proto);
+    if (!vt) {
+        session_write_terminal(sess, "\r\n\x1b[1;31m[自动重连失败: 不支持的协议]\x1b[0m\r\n");
+        return;
+    }
+
+    session_write_terminal(sess, "\x1b[1;36m[自动重连] 正在尝试连接...\x1b[0m\r\n");
+
+    char *realhost = NULL;
+    char *err = backend_init(vt, &sess->wgs.seat, &sess->backend, sess->logctx, sess->cfg,
+                             conf_get_str(sess->cfg, CONF_host),
+                             conf_get_int(sess->cfg, CONF_port),
+                             &realhost,
+                             conf_get_bool(sess->cfg, CONF_tcp_nodelay),
+                             conf_get_bool(sess->cfg, CONF_tcp_keepalives));
+    sfree(realhost);
+
+    if (err) {
+        char banner[512];
+        snprintf(banner, sizeof(banner), "\x1b[1;31m[连接失败: %s]\x1b[0m\r\n", err);
+        session_write_terminal(sess, banner);
+        sfree(err);
+        if (sess->hwnd) {
+            webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
+        }
+        if (sess->auto_reconnect) {
+            session_schedule_reconnect(sess);
+        }
+    } else {
+        sess->wgs.backend = sess->backend;
+        if (proto == PROT_SERIAL || proto == PROT_CONPTY || proto == PROT_RAW) {
+            if (sess->auto_reconnect) {
+                session_write_terminal(sess, "\x1b[1;32m[自动重连成功]\x1b[0m\r\n");
+            }
+            if (sess->log_enabled) {
+                session_start_log(sess);
+                char log_hint[MAX_PATH + 64];
+                snprintf(log_hint, sizeof(log_hint), "\x1b[1;36m[已自动创建新日志文件: %s]\x1b[0m\r\n", sess->log_filename);
+                session_write_terminal(sess, log_hint);
+            }
+        }
+        if (sess->hwnd) {
+            webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "connected");
+        }
+    }
+}
+
+static void session_toggle_auto_reconnect(WebKitSession *sess)
+{
+    if (!sess) return;
+    sess->auto_reconnect = !sess->auto_reconnect;
+
+    if (sess->hwnd) {
+        char notify[32];
+        snprintf(notify, sizeof(notify), "A%d:%d", sess->id, sess->auto_reconnect ? 1 : 0);
+        webview_host_send_to_window(sess->hwnd, notify);
+    }
+
+    if (sess->auto_reconnect) {
+        session_write_terminal(sess, "\r\n\x1b[1;32m[自动重连已开启]\x1b[0m\r\n");
+        if ((!sess->backend || !backend_connected(sess->backend)) && !sess->reconnect_timer_active) {
+            session_schedule_reconnect(sess);
+        }
+    } else {
+        session_write_terminal(sess, "\r\n\x1b[33m[自动重连已关闭]\x1b[0m\r\n");
+        if (sess->reconnect_timer_active) {
+            expire_timer_context(&sess->reconnect_timer_active);
+            sess->reconnect_timer_active = false;
+            session_write_terminal(sess, "\r\x1b[2K\x1b[33m[自动重连已关闭]\x1b[0m\r\n");
+        } else {
+            session_write_terminal(sess, "\r\n\x1b[33m[自动重连已关闭]\x1b[0m\r\n");
+        }
+    }
+}
+
 /* SeatVtable implementations */
 static size_t webkit_seat_output(Seat *seat, SeatOutputType type,
                                  const void *data, size_t len)
@@ -417,6 +674,10 @@ static size_t webkit_seat_output(Seat *seat, SeatOutputType type,
     if (len > 0) {
         WebKitSession *sess = session_from_seat(seat);
         session_record_output(sess, data, len);
+        if (sess->log_fp) {
+            fwrite(data, 1, len, sess->log_fp);
+            fflush(sess->log_fp);
+        }
         if (sess->hwnd) {
             webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, data, len);
         }
@@ -443,6 +704,15 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
 static void webkit_seat_notify_session_started(Seat *seat)
 {
     WebKitSession *sess = session_from_seat(seat);
+    if (sess->auto_reconnect) {
+        session_write_terminal(sess, "\x1b[1;32m[自动重连成功]\x1b[0m\r\n");
+    }
+    if (sess->log_enabled) {
+        session_start_log(sess);
+        char log_hint[MAX_PATH + 64];
+        snprintf(log_hint, sizeof(log_hint), "\x1b[1;36m[已自动创建新日志文件: %s]\x1b[0m\r\n", sess->log_filename);
+        session_write_terminal(sess, log_hint);
+    }
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "connected");
     }
@@ -451,38 +721,77 @@ static void webkit_seat_notify_session_started(Seat *seat)
 static void webkit_seat_notify_remote_exit(Seat *seat)
 {
     WebKitSession *sess = session_from_seat(seat);
+    if (sess->log_fp) {
+        fclose(sess->log_fp);
+        sess->log_fp = NULL;
+        sess->is_logging = false;
+    }
     expire_timer_context(sess);
     bufchain_clear(&sess->send_queue);
     sess->send_timer_active = false;
+    if (sess->backend) {
+        backend_free(sess->backend);
+        sess->backend = NULL;
+        sess->wgs.backend = NULL;
+    }
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, "\r\n\x1b[31m[Connection closed by remote host]\x1b[0m\r\n", 48);
+    }
+    if (sess->auto_reconnect) {
+        session_schedule_reconnect(sess);
     }
 }
 
 static void webkit_seat_notify_remote_disconnect(Seat *seat)
 {
     WebKitSession *sess = session_from_seat(seat);
+    if (sess->log_fp) {
+        fclose(sess->log_fp);
+        sess->log_fp = NULL;
+        sess->is_logging = false;
+    }
     expire_timer_context(sess);
     bufchain_clear(&sess->send_queue);
     sess->send_timer_active = false;
+    if (sess->backend) {
+        backend_free(sess->backend);
+        sess->backend = NULL;
+        sess->wgs.backend = NULL;
+    }
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, "\r\n\x1b[1;31m[Connection disconnected]\x1b[0m\r\n", 39);
+    }
+    if (sess->auto_reconnect) {
+        session_schedule_reconnect(sess);
     }
 }
 
 static void webkit_seat_connection_fatal(Seat *seat, const char *msg)
 {
     WebKitSession *sess = session_from_seat(seat);
+    if (sess->log_fp) {
+        fclose(sess->log_fp);
+        sess->log_fp = NULL;
+        sess->is_logging = false;
+    }
     expire_timer_context(sess);
     bufchain_clear(&sess->send_queue);
     sess->send_timer_active = false;
+    if (sess->backend) {
+        backend_free(sess->backend);
+        sess->backend = NULL;
+        sess->wgs.backend = NULL;
+    }
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         char banner[512];
         snprintf(banner, sizeof(banner), "\r\n\x1b[1;31m[Fatal Error: %s]\x1b[0m\r\n", msg ? msg : "Connection failed");
         webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, banner, strlen(banner));
+    }
+    if (sess->auto_reconnect) {
+        session_schedule_reconnect(sess);
     }
 }
 
@@ -753,6 +1062,9 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
             webview_host_send_session_text_to_window(target_hwnd, '2', sess->id, "disconnected");
         }
         sfree(err);
+        if (sess->auto_reconnect) {
+            session_schedule_reconnect(sess);
+        }
     } else {
         sess->wgs.backend = sess->backend;
     }
@@ -775,7 +1087,15 @@ static void session_close(int id)
     }
 
     if (target) {
+        if (target->log_fp) {
+            fclose(target->log_fp);
+            target->log_fp = NULL;
+        }
+        target->is_logging = false;
+        target->log_enabled = false;
         expire_timer_context(target);
+        expire_timer_context(&target->reconnect_timer_active);
+        target->reconnect_timer_active = false;
         bufchain_clear(&target->send_queue);
         HWND win_hwnd = target->hwnd;
         if (target->backend) {
@@ -907,6 +1227,18 @@ static void session_attach_to_window(HWND target_hwnd, int sess_id)
     webview_host_send_to_window(target_hwnd, tab_msg);
     webview_host_send_session_text_to_window(target_hwnd, '2', sess->id,
         (sess->backend && backend_connected(sess->backend)) ? "connected" : "disconnected");
+
+    char log_msg[MAX_PATH + 32];
+    if (sess->log_enabled) {
+        snprintf(log_msg, sizeof(log_msg), "L%d:1:%s", sess->id, sess->log_filename);
+    } else {
+        snprintf(log_msg, sizeof(log_msg), "L%d:0", sess->id);
+    }
+    webview_host_send_to_window(target_hwnd, log_msg);
+
+    char auto_msg[32];
+    snprintf(auto_msg, sizeof(auto_msg), "A%d:%d", sess->id, sess->auto_reconnect ? 1 : 0);
+    webview_host_send_to_window(target_hwnd, auto_msg);
 
     /* Replay output history into the target window */
     session_replay_output(target_hwnd, sess);
@@ -1040,6 +1372,16 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                 webview_host_send_to_window(hwnd, tab_msg);
                 webview_host_send_session_text_to_window(hwnd, '2', s->id,
                     (s->backend && backend_connected(s->backend)) ? "connected" : "disconnected");
+                char log_msg[MAX_PATH + 32];
+                if (s->log_enabled) {
+                    snprintf(log_msg, sizeof(log_msg), "L%d:1:%s", s->id, s->log_filename);
+                } else {
+                    snprintf(log_msg, sizeof(log_msg), "L%d:0", s->id);
+                }
+                webview_host_send_to_window(hwnd, log_msg);
+                char auto_msg[32];
+                snprintf(auto_msg, sizeof(auto_msg), "A%d:%d", s->id, s->auto_reconnect ? 1 : 0);
+                webview_host_send_to_window(hwnd, auto_msg);
                 session_replay_output(hwnd, s);
             }
         }
@@ -1074,6 +1416,18 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
     } else if (type == '3') {
         if (!strcmp(payload, "new_tab")) {
             session_new_via_dialog(hwnd);
+        } else if (strstr(payload, ":toggle_log")) {
+            int sess_id = atoi(payload);
+            WebKitSession *sess = session_find(sess_id);
+            if (sess) {
+                session_toggle_log(sess);
+            }
+        } else if (strstr(payload, ":toggle_auto_reconnect")) {
+            int sess_id = atoi(payload);
+            WebKitSession *sess = session_find(sess_id);
+            if (sess) {
+                session_toggle_auto_reconnect(sess);
+            }
         } else if (strstr(payload, ":clone")) {
             int sess_id = atoi(payload);
             session_clone(hwnd, sess_id);
@@ -1131,6 +1485,14 @@ static LRESULT CALLBACK WebKitWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
     case WM_SIZE:
         webview_host_resize(hwnd);
+        return 0;
+    case WM_SETFOCUS:
+        webview_host_focus(hwnd);
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) != WA_INACTIVE) {
+            webview_host_focus(hwnd);
+        }
         return 0;
     case WM_DESTROY: {
         bool is_ui_window = false;
@@ -1424,6 +1786,28 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         }
 
         run_toplevel_callbacks();
+
+        /* Process PuTTY timer queue */
+        unsigned long next_timer;
+        run_timers(GETTICKCOUNT(), &next_timer);
+
+        /* Guarantee auto-reconnect trigger and dynamic countdown */
+        for (WebKitSession *s = sessions_head; s; s = s->next) {
+            if (s->auto_reconnect && s->reconnect_timer_active) {
+                unsigned long now_tick = GETTICKCOUNT();
+                if ((long)(now_tick - s->reconnect_target_tick) >= 0) {
+                    s->reconnect_timer_active = false;
+                    expire_timer_context(&s->reconnect_timer_active);
+                    session_reconnect(s);
+                } else if (s->reconnect_countdown > 1 && (long)(now_tick - s->reconnect_next_tick) >= 0) {
+                    s->reconnect_countdown--;
+                    s->reconnect_next_tick += 1 * TICKSPERSEC;
+                    char cd_buf[64];
+                    snprintf(cd_buf, sizeof(cd_buf), "\r\x1b[2K\x1b[1;33m[自动重连] %d 秒后尝试重新连接...\x1b[0m", s->reconnect_countdown);
+                    session_write_terminal(s, cd_buf);
+                }
+            }
+        }
     }
 
 finished:
