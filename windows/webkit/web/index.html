@@ -399,93 +399,120 @@
       border-bottom: 2px solid var(--term-cursor, #ffffff) !important;
     }
 
-    /* Multi-line Text Editor Modal */
+    /* Multi-line Text Editor Floating Window */
     .mle-backdrop {
       position: fixed;
       top: 0;
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.58);
-      backdrop-filter: blur(2.5px);
+      background: transparent;
+      pointer-events: none;
       z-index: 9999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      animation: mleFadeIn 0.15s ease-out;
-    }
-    @keyframes mleFadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
     }
     .mle-dialog {
+      position: fixed;
+      pointer-events: auto;
       background: #252526;
-      border: 1px solid #454545;
-      border-radius: 6px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
-      width: 720px;
-      max-width: 92vw;
+      border: 1px solid #4f4f4f;
+      border-radius: 7px;
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      width: 700px;
+      height: 440px;
+      min-width: 400px;
+      min-height: 240px;
+      max-width: 98vw;
+      max-height: 98vh;
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      animation: mleSlideIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    @keyframes mleSlideIn {
-      from { transform: scale(0.96) translateY(-12px); opacity: 0; }
-      to { transform: scale(1) translateY(0); opacity: 1; }
+      resize: both;
+      transition: opacity 0.15s ease;
     }
     .mle-header {
-      padding: 10px 14px;
+      padding: 7px 12px;
       background: #2d2d2d;
       border-bottom: 1px solid #3c3c3c;
       display: flex;
       align-items: center;
       justify-content: space-between;
       user-select: none;
+      cursor: grab;
+      flex-shrink: 0;
+    }
+    .mle-header:active {
+      cursor: grabbing;
     }
     .mle-title {
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       color: #e0e0e0;
       display: flex;
       align-items: center;
+      gap: 6px;
+      overflow: hidden;
+    }
+    .mle-title-tag {
+      font-size: 11px;
+      font-weight: normal;
+      color: #8bb2d9;
+      background: rgba(139, 178, 217, 0.12);
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid rgba(139, 178, 217, 0.2);
+      white-space: nowrap;
+    }
+    .mle-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
     }
     .mle-btn-icon {
       background: none;
       border: none;
       color: #aaa;
       cursor: pointer;
-      font-size: 14px;
-      padding: 3px 8px;
+      font-size: 13px;
+      padding: 3px 7px;
       border-radius: 3px;
       line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
       transition: background 0.1s, color 0.1s;
     }
     .mle-btn-icon:hover {
       background: #3c3c3c;
       color: #fff;
     }
+    .mle-btn-icon:active {
+      background: #4a4a4a;
+    }
     .mle-body {
-      padding: 12px 14px 8px 14px;
+      padding: 10px 12px 6px 12px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+      flex: 1;
+      min-height: 0;
     }
     .mle-tip {
       font-size: 11.5px;
       color: #9cdcfe;
       background: rgba(156, 220, 254, 0.08);
-      padding: 7px 10px;
+      padding: 5px 8px;
       border-radius: 4px;
       border-left: 3px solid #007acc;
-      line-height: 1.45;
+      line-height: 1.4;
       user-select: none;
+      flex-shrink: 0;
     }
     .mle-tip kbd {
       background: #333;
       border: 1px solid #555;
       border-radius: 3px;
-      padding: 1px 5px;
+      padding: 0 4px;
       font-family: inherit;
       font-size: 10.5px;
       color: #fff;
@@ -499,10 +526,9 @@
       border: 1px solid #3c3c3c;
       border-radius: 4px;
       padding: 10px;
-      height: 250px;
-      min-height: 160px;
-      max-height: 60vh;
-      resize: vertical;
+      flex: 1;
+      min-height: 60px;
+      resize: none;
       outline: none;
       width: 100%;
       box-sizing: border-box;
@@ -513,7 +539,7 @@
       box-shadow: 0 0 0 1px #007acc;
     }
     .mle-footer {
-      padding: 10px 14px;
+      padding: 8px 12px;
       background: #2d2d2d;
       border-top: 1px solid #3c3c3c;
       display: flex;
@@ -643,22 +669,42 @@
     </div>
   </div>
 
-  <!-- Multi-line Text Editor Modal (Triggered by Ctrl + Left Click on Terminal) -->
+  <!-- Multi-line Text Editor Floating Window (Triggered by Ctrl + Left Click on Terminal) -->
   <div id="mle-modal" class="mle-backdrop" style="display: none;">
     <div class="mle-dialog">
       <div class="mle-header">
         <div class="mle-title">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
           </svg>
-          <span id="mle-title-text">多行文本编辑器 (Multi-line Editor)</span>
+          <span id="mle-title-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">多行文本编辑器</span>
+          <span class="mle-title-tag">可拖动 / 缩放</span>
         </div>
-        <button id="mle-close-btn" class="mle-btn-icon" title="关闭 (Esc)">✕</button>
+        <div class="mle-header-actions">
+          <button id="mle-opacity-btn" class="mle-btn-icon" title="切换窗口透明度 (方便看清背景终端内容)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor"></path>
+            </svg>
+            <span id="mle-opacity-val" style="font-size: 11px;">100%</span>
+          </button>
+          <button id="mle-recenter-btn" class="mle-btn-icon" title="重置窗口居中">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="8"></circle>
+              <line x1="12" y1="2" x2="12" y2="6"></line>
+              <line x1="12" y1="18" x2="12" y2="22"></line>
+              <line x1="2" y1="12" x2="6" y2="12"></line>
+              <line x1="18" y1="12" x2="22" y2="12"></line>
+            </svg>
+            <span style="font-size: 11px;">居中</span>
+          </button>
+          <button id="mle-close-btn" class="mle-btn-icon" title="关闭 (Esc)">✕</button>
+        </div>
       </div>
       <div class="mle-body">
         <div class="mle-tip">
-          💡 <b>提示</b>：按 <kbd>Enter</kbd> 正常换行<b>不会发送到终端</b>。编辑完成后，点击【发送 / 粘贴】或按 <kbd>Ctrl+Enter</kbd>，将以<b>粘贴</b>效果填入终端（不自动回车执行）。
+          💡 <b>独立浮窗</b>：顶栏可拖动、右下角可缩放、点击“100%”可切半透明看背景。按 <kbd>Enter</kbd> 正常换行，<kbd>Ctrl+Enter</kbd> 发送到终端（不自动执行）。
         </div>
         <textarea id="mle-textarea" placeholder="在此输入或编辑多行文本、脚本或命令...&#10;按 Enter 正常换行，绝不会提前发送到终端&#10;编辑完毕后点击下方【发送 / 粘贴】或按 Ctrl+Enter，如同右键粘贴一样安全填入终端" spellcheck="false"></textarea>
       </div>
@@ -1077,6 +1123,9 @@
         if (g.activeSessionId && sessions[g.activeSessionId]) {
           activeGlobalSessionId = g.activeSessionId;
           document.title = `${sessions[g.activeSessionId].title} - PuTTY-WebKit`;
+          if (typeof updateMleSessionIfOpen === 'function') {
+            updateMleSessionIfOpen(activeGlobalSessionId);
+          }
         }
       }
 
@@ -1151,6 +1200,9 @@
         cur.viewEl.classList.add('active');
         activeGlobalSessionId = sid;
         document.title = `${cur.title} - PuTTY-WebKit`;
+        if (typeof updateMleSessionIfOpen === 'function') {
+          updateMleSessionIfOpen(sid);
+        }
 
         this.updateGroupLogButton(gid);
         this.updateGroupAutoReconnectButton(gid);
@@ -1998,17 +2050,161 @@
         }
       });
 
-      // Multi-line Text Editor Logic
+      // Multi-line Text Editor Logic (Independent Floating Window)
       let mleActiveSessionId = null;
+      let mleDialogPos = null; // { left, top, width, height }
       const mleModalEl = document.getElementById('mle-modal');
+      const mleDialogEl = document.querySelector('.mle-dialog');
+      const mleHeaderEl = document.querySelector('.mle-header');
       const mleTextareaEl = document.getElementById('mle-textarea');
       const mleTitleTextEl = document.getElementById('mle-title-text');
       const mleStatusEl = document.getElementById('mle-status');
+      const mleOpacityBtn = document.getElementById('mle-opacity-btn');
+      const mleOpacityVal = document.getElementById('mle-opacity-val');
+      const mleRecenterBtn = document.getElementById('mle-recenter-btn');
       const mleCopyBtn = document.getElementById('mle-copy-btn');
       const mleCloseBtn = document.getElementById('mle-close-btn');
       const mleCancelBtn = document.getElementById('mle-cancel-btn');
       const mleClearBtn = document.getElementById('mle-clear-btn');
       const mleSendBtn = document.getElementById('mle-send-btn');
+
+      const MLE_OPACITY_LEVELS = [1.0, 0.85, 0.65, 0.45];
+      let mleOpacityIndex = 0;
+
+      function updateMleOpacity() {
+        if (!mleDialogEl) return;
+        const op = MLE_OPACITY_LEVELS[mleOpacityIndex];
+        mleDialogEl.style.opacity = op.toString();
+        if (mleOpacityVal) {
+          mleOpacityVal.textContent = Math.round(op * 100) + '%';
+        }
+      }
+
+      if (mleOpacityBtn) {
+        mleOpacityBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          mleOpacityIndex = (mleOpacityIndex + 1) % MLE_OPACITY_LEVELS.length;
+          updateMleOpacity();
+        });
+      }
+
+      function updateMleTitle() {
+        if (!mleTitleTextEl) return;
+        const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+        if (targetSid && sessions[targetSid]) {
+          const s = sessions[targetSid];
+          const sessionTitle = s.baseTitle || s.title || `Session ${targetSid}`;
+          mleTitleTextEl.textContent = `多行文本编辑器 - [${sessionTitle}]`;
+        } else {
+          mleTitleTextEl.textContent = `多行文本编辑器`;
+        }
+      }
+
+      function updateMleSessionIfOpen(sid) {
+        if (mleModalEl && mleModalEl.style.display !== 'none') {
+          mleActiveSessionId = sid;
+          updateMleTitle();
+        }
+      }
+
+      function centerMleDialog() {
+        if (!mleDialogEl) return;
+        const w = (mleDialogPos && mleDialogPos.width) ? mleDialogPos.width : Math.min(700, window.innerWidth - 40);
+        const h = (mleDialogPos && mleDialogPos.height) ? mleDialogPos.height : Math.min(440, window.innerHeight - 60);
+        const left = Math.max(10, Math.round((window.innerWidth - w) / 2));
+        const top = Math.max(20, Math.round((window.innerHeight - h) / 2));
+        mleDialogEl.style.left = left + 'px';
+        mleDialogEl.style.top = top + 'px';
+        mleDialogEl.style.width = w + 'px';
+        mleDialogEl.style.height = h + 'px';
+        mleDialogPos = { left, top, width: w, height: h };
+      }
+
+      if (mleRecenterBtn) {
+        mleRecenterBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          centerMleDialog();
+        });
+      }
+
+      // Dragging by header
+      if (mleHeaderEl && mleDialogEl) {
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let initialLeft = 0;
+        let initialTop = 0;
+
+        mleHeaderEl.addEventListener('mousedown', (e) => {
+          if (e.target.closest('button') || e.target.closest('.mle-header-actions')) return;
+          if (e.button !== 0) return;
+
+          isDragging = true;
+          dragStartX = e.clientX;
+          dragStartY = e.clientY;
+
+          const rect = mleDialogEl.getBoundingClientRect();
+          initialLeft = rect.left;
+          initialTop = rect.top;
+
+          document.body.style.userSelect = 'none';
+          mleHeaderEl.style.cursor = 'grabbing';
+
+          const onMouseMove = (ev) => {
+            if (!isDragging) return;
+            const dx = ev.clientX - dragStartX;
+            const dy = ev.clientY - dragStartY;
+
+            let newLeft = initialLeft + dx;
+            let newTop = initialTop + dy;
+
+            const maxLeft = Math.max(10, window.innerWidth - 80);
+            const maxTop = Math.max(10, window.innerHeight - 50);
+            newLeft = Math.max(-mleDialogEl.offsetWidth + 100, Math.min(maxLeft, newLeft));
+            newTop = Math.max(0, Math.min(maxTop, newTop));
+
+            mleDialogEl.style.left = newLeft + 'px';
+            mleDialogEl.style.top = newTop + 'px';
+          };
+
+          const onMouseUp = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            document.body.style.userSelect = '';
+            mleHeaderEl.style.cursor = 'grab';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+
+            const rect = mleDialogEl.getBoundingClientRect();
+            mleDialogPos = {
+              left: rect.left,
+              top: rect.top,
+              width: rect.width,
+              height: rect.height
+            };
+          };
+
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        });
+      }
+
+      // Track size changes via ResizeObserver
+      if (window.ResizeObserver && mleDialogEl) {
+        const ro = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            if (entry.target === mleDialogEl && mleModalEl && mleModalEl.style.display !== 'none') {
+              const rect = mleDialogEl.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                if (!mleDialogPos) mleDialogPos = {};
+                mleDialogPos.width = Math.round(rect.width);
+                mleDialogPos.height = Math.round(rect.height);
+              }
+            }
+          }
+        });
+        ro.observe(mleDialogEl);
+      }
 
       function updateMleStatus() {
         if (!mleTextareaEl) return;
@@ -2024,12 +2220,21 @@
         const s = sessions[sessionId];
         if (!s) return;
         mleActiveSessionId = sessionId;
-        const sessionTitle = s.baseTitle || s.title || `Session ${sessionId}`;
-        if (mleTitleTextEl) {
-          mleTitleTextEl.textContent = `多行文本编辑器 - [${sessionTitle}]`;
-        }
+        updateMleTitle();
         if (mleModalEl) {
-          mleModalEl.style.display = 'flex';
+          mleModalEl.style.display = 'block';
+        }
+        if (!mleDialogPos) {
+          centerMleDialog();
+        } else {
+          const maxLeft = Math.max(10, window.innerWidth - 80);
+          const maxTop = Math.max(10, window.innerHeight - 50);
+          const curLeft = Math.max(10, Math.min(maxLeft, mleDialogPos.left));
+          const curTop = Math.max(0, Math.min(maxTop, mleDialogPos.top));
+          mleDialogEl.style.left = curLeft + 'px';
+          mleDialogEl.style.top = curTop + 'px';
+          if (mleDialogPos.width) mleDialogEl.style.width = mleDialogPos.width + 'px';
+          if (mleDialogPos.height) mleDialogEl.style.height = mleDialogPos.height + 'px';
         }
         updateMleStatus();
         setTimeout(() => {
@@ -2043,18 +2248,20 @@
         if (mleModalEl) {
           mleModalEl.style.display = 'none';
         }
-        if (mleActiveSessionId && sessions[mleActiveSessionId]) {
-          sessions[mleActiveSessionId].term.focus();
+        const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+        if (targetSid && sessions[targetSid]) {
+          sessions[targetSid].term.focus();
         }
         mleActiveSessionId = null;
       }
 
       function sendMultiLineText() {
-        if (!mleActiveSessionId || !sessions[mleActiveSessionId]) {
+        const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+        if (!targetSid || !sessions[targetSid]) {
           closeMultiLineEditor();
           return;
         }
-        const s = sessions[mleActiveSessionId];
+        const s = sessions[targetSid];
         const rawText = mleTextareaEl ? mleTextareaEl.value : '';
         if (mleTextareaEl) {
           mleTextareaEl.value = '';
@@ -2089,6 +2296,15 @@
         });
       }
 
+      if (mleDialogEl) {
+        mleDialogEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMultiLineEditor();
+          }
+        });
+      }
+
       if (mleCloseBtn) mleCloseBtn.addEventListener('click', closeMultiLineEditor);
       if (mleCancelBtn) mleCancelBtn.addEventListener('click', closeMultiLineEditor);
       if (mleClearBtn) {
@@ -2115,14 +2331,6 @@
         });
       }
       if (mleSendBtn) mleSendBtn.addEventListener('click', sendMultiLineText);
-
-      if (mleModalEl) {
-        mleModalEl.addEventListener('mousedown', (e) => {
-          if (e.target === mleModalEl) {
-            closeMultiLineEditor();
-          }
-        });
-      }
 
       // Window/Document focus routing: ensure active terminal is focused (guarded by modal)
       window.addEventListener('focus', () => {
