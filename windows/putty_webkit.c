@@ -122,16 +122,7 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
     wchar_t *last_slash = wcsrchr(exe_path, L'\\');
     if (last_slash) *last_slash = L'\0';
 
-    /* 1. Check if webkit/web/index.html already exists next to exe */
-    _snwprintf(target_web_dir, MAX_PATH, L"%s\\webkit\\web", exe_path);
-    _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
-
-    if (GetFileAttributesW(out_html_path) != INVALID_FILE_ATTRIBUTES) {
-        /* Already exists on disk! Immediate 0ms load */
-        return;
-    }
-
-    /* 2. Check development tree fallback (source checkout) */
+    /* 1. Check development tree fallback (source checkout) FIRST so dev edits are instant */
     wchar_t dev_html[MAX_PATH];
     _snwprintf(dev_html, MAX_PATH, L"%s\\..\\..\\windows\\webkit\\web\\index.html", exe_path);
     if (GetFileAttributesW(dev_html) != INVALID_FILE_ATTRIBUTES) {
@@ -140,7 +131,10 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
         return;
     }
 
-    /* 3. Not found on disk! Create webkit/web directory next to exe */
+    /* 2. Deployed standalone mode: ensure target directory exists */
+    _snwprintf(target_web_dir, MAX_PATH, L"%s\\webkit\\web", exe_path);
+    _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
+
     bool dir_ok = create_directory_recursive(target_web_dir);
     if (!dir_ok) {
         /* If exe directory is read-only (e.g. Program Files), fall back to %LOCALAPPDATA% */
@@ -152,39 +146,18 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
         }
     }
 
-    /* Extract embedded assets synchronously (340KB total, takes ~2ms) */
-    for (size_t i = 0; i < NUM_EMBEDDED_ASSETS; i++) {
-        wchar_t filepath[MAX_PATH];
-        _snwprintf(filepath, MAX_PATH, L"%s\\%s", target_web_dir, embedded_assets[i].filename);
-        extract_resource_to_file(embedded_assets[i].res_id, filepath);
-    }
-}
-
-static DWORD WINAPI background_asset_sync_thread(LPVOID param)
-{
-    const wchar_t *web_dir = (const wchar_t *)param;
-    if (!web_dir || !*web_dir) return 0;
-
-    /* Run with low priority so UI rendering and user interaction stay completely unaffected */
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-
-    /* Polite initial delay to give WebView2 full priority during startup */
-    Sleep(300);
-
+    /* 3. Fast synchronous verification & sync of embedded assets (< 1ms total)
+     * Automatically updates disk files if exe is upgraded, without requiring manual deletion of webkit/ */
     for (size_t i = 0; i < NUM_EMBEDDED_ASSETS; i++) {
         HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_assets[i].res_id), MAKEINTRESOURCEW(10));
         if (!hrsrc) continue;
-        HGLOBAL hg = LoadResource(hinst, hrsrc);
-        if (!hg) continue;
-        const void *res_data = LockResource(hg);
         DWORD res_size = SizeofResource(hinst, hrsrc);
-        if (!res_data || res_size == 0) continue;
+        if (res_size == 0) continue;
 
         wchar_t filepath[MAX_PATH];
-        _snwprintf(filepath, MAX_PATH, L"%s\\%s", web_dir, embedded_assets[i].filename);
+        _snwprintf(filepath, MAX_PATH, L"%s\\%s", target_web_dir, embedded_assets[i].filename);
 
         bool needs_update = false;
-
         HANDLE hf = CreateFileW(filepath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hf == INVALID_HANDLE_VALUE) {
@@ -193,30 +166,15 @@ static DWORD WINAPI background_asset_sync_thread(LPVOID param)
             LARGE_INTEGER fsize;
             if (!GetFileSizeEx(hf, &fsize) || (DWORD)fsize.QuadPart != res_size) {
                 needs_update = true;
-            } else {
-                char *buf = (char *)smalloc(res_size);
-                DWORD read_bytes = 0;
-                if (ReadFile(hf, buf, res_size, &read_bytes, NULL) && read_bytes == res_size) {
-                    if (memcmp(buf, res_data, res_size) != 0) {
-                        needs_update = true;
-                    }
-                } else {
-                    needs_update = true;
-                }
-                sfree(buf);
             }
             CloseHandle(hf);
         }
 
         if (needs_update) {
-            dbg_log("Background asset sync: updating %ls (%u bytes)", embedded_assets[i].filename, res_size);
+            dbg_log("Asset sync: extracting %ls (%u bytes)", embedded_assets[i].filename, res_size);
             extract_resource_to_file(embedded_assets[i].res_id, filepath);
         }
-
-        Sleep(20); /* Yield CPU politely between files */
     }
-
-    return 0;
 }
 
 #define REPLAY_BUF_SIZE (64 * 1024)
@@ -2098,9 +2056,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         cleanup_exit(1);
     }
     SetWindowTextA(first_hwnd, title);
-
-    /* Start background asset sync thread to verify and update disk assets if exe was upgraded */
-    CreateThread(NULL, 0, background_asset_sync_thread, (LPVOID)target_web_dir, 0, NULL);
 
     /* Create initial session */
     session_create(first_hwnd, cfg, title);
