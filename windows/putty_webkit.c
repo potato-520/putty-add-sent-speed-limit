@@ -220,6 +220,7 @@ typedef struct WebKitSession {
     bool modal_autologin;
     bool login_failed;
     int prompt_attempts;
+    bool username_displayed;
 
     struct WebKitSession *next;
 } WebKitSession;
@@ -886,64 +887,107 @@ static void pw_get_dir(wchar_t *out_dir, size_t max_len)
     }
 }
 
-static void pw_get_filepath(wchar_t *out_path, size_t max_len, const char *host, int port)
+static void pw_sanitize_filename_part(const char *src, char *dst, size_t dst_sz)
+{
+    if (!dst || dst_sz == 0) return;
+    size_t j = 0;
+    for (size_t i = 0; src && src[i] && j + 1 < dst_sz; i++) {
+        char c = src[i];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+            c == '"' || c == '<' || c == '>' || c == '|' || (unsigned char)c < 0x20) {
+            dst[j++] = '_';
+        } else {
+            dst[j++] = c;
+        }
+    }
+    dst[j] = '\0';
+    if (dst[0] == '\0') {
+        strncpy(dst, "default", dst_sz - 1);
+        dst[dst_sz - 1] = '\0';
+    }
+}
+
+static void pw_get_user_filepath(wchar_t *out_path, size_t max_len,
+                                 const char *host, int port, const char *user)
 {
     wchar_t pw_dir[MAX_PATH];
     pw_get_dir(pw_dir, MAX_PATH);
 
-    /* Sanitize host for safe Windows filename */
-    char safe_host[128];
-    size_t j = 0;
-    for (size_t i = 0; host && host[i] && j + 1 < sizeof(safe_host); i++) {
-        char c = host[i];
-        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
-            c == '"' || c == '<' || c == '>' || c == '|' || (unsigned char)c < 0x20) {
-            safe_host[j++] = '_';
-        } else {
-            safe_host[j++] = c;
-        }
-    }
-    safe_host[j] = '\0';
-    if (safe_host[0] == '\0') {
-        strncpy(safe_host, "default", sizeof(safe_host) - 1);
-    }
+    char safe_host[128], safe_user[128];
+    pw_sanitize_filename_part(host, safe_host, sizeof(safe_host));
+    pw_sanitize_filename_part(user, safe_user, sizeof(safe_user));
 
-    wchar_t w_safe_host[128];
-    MultiByteToWideChar(CP_UTF8, 0, safe_host, -1, w_safe_host, 128);
+    wchar_t w_host[128], w_user[128];
+    MultiByteToWideChar(CP_UTF8, 0, safe_host, -1, w_host, 128);
+    MultiByteToWideChar(CP_UTF8, 0, safe_user, -1, w_user, 128);
 
-    _snwprintf(out_path, max_len, L"%s\\%s_%d.enc", pw_dir, w_safe_host, port > 0 ? port : 22);
+    _snwprintf(out_path, max_len, L"%s\\%s_%d_%s.enc", pw_dir, w_host, port > 0 ? port : 22, w_user);
 }
 
-static void pw_delete_credential(const char *host, int port)
+static void pw_get_last_user_filepath(wchar_t *out_path, size_t max_len,
+                                      const char *host, int port)
+{
+    wchar_t pw_dir[MAX_PATH];
+    pw_get_dir(pw_dir, MAX_PATH);
+
+    char safe_host[128];
+    pw_sanitize_filename_part(host, safe_host, sizeof(safe_host));
+
+    wchar_t w_host[128];
+    MultiByteToWideChar(CP_UTF8, 0, safe_host, -1, w_host, 128);
+
+    _snwprintf(out_path, max_len, L"%s\\%s_%d_last.txt", pw_dir, w_host, port > 0 ? port : 22);
+}
+
+static void pw_get_legacy_filepath(wchar_t *out_path, size_t max_len,
+                                   const char *host, int port)
+{
+    wchar_t pw_dir[MAX_PATH];
+    pw_get_dir(pw_dir, MAX_PATH);
+
+    char safe_host[128];
+    pw_sanitize_filename_part(host, safe_host, sizeof(safe_host));
+
+    wchar_t w_host[128];
+    MultiByteToWideChar(CP_UTF8, 0, safe_host, -1, w_host, 128);
+
+    _snwprintf(out_path, max_len, L"%s\\%s_%d.enc", pw_dir, w_host, port > 0 ? port : 22);
+}
+
+static void pw_delete_credential(const char *host, int port, const char *user)
 {
     if (!host || !*host)
         return;
-    wchar_t filepath[MAX_PATH];
-    pw_get_filepath(filepath, MAX_PATH, host, port);
-    _wremove(filepath);
-    dbg_log("pw_delete_credential: Removed %ls for %s:%d", filepath, host, port);
+    if (user && *user) {
+        wchar_t filepath[MAX_PATH];
+        pw_get_user_filepath(filepath, MAX_PATH, host, port, user);
+        _wremove(filepath);
+    }
+    wchar_t legacy[MAX_PATH];
+    pw_get_legacy_filepath(legacy, MAX_PATH, host, port);
+    _wremove(legacy);
 }
 
 static bool pw_save_credential(const char *host, int port, const char *user, const char *pass,
                                bool remember, bool autologin)
 {
-    if (!host || !*host)
+    if (!host || !*host || !user || !*user)
         return false;
 
-    wchar_t filepath[MAX_PATH];
-    pw_get_filepath(filepath, MAX_PATH, host, port);
-
     if (!remember) {
-        _wremove(filepath);
+        pw_delete_credential(host, port, user);
         return true;
     }
 
     if (!pass || !*pass)
         return false;
 
+    wchar_t filepath[MAX_PATH];
+    pw_get_user_filepath(filepath, MAX_PATH, host, port, user);
+
     char plaintext[512];
     int pt_len = snprintf(plaintext, sizeof(plaintext), "USER:%s\nPASS:%s\nREMEMBER:%d\nAUTOLOGIN:%d\n",
-                          user ? user : "", pass, remember ? 1 : 0, autologin ? 1 : 0);
+                          user, pass, remember ? 1 : 0, autologin ? 1 : 0);
     if (pt_len <= 0 || (size_t)pt_len >= sizeof(plaintext))
         return false;
 
@@ -975,26 +1019,34 @@ static bool pw_save_credential(const char *host, int port, const char *user, con
     fclose(fp);
     LocalFree(data_out.pbData);
 
-    dbg_log("pw_save_credential: Saved %s:%d to %ls (%zu bytes, rem=%d, auto=%d)",
-            host, port, filepath, written, remember ? 1 : 0, autologin ? 1 : 0);
+    /* Record last used user */
+    wchar_t last_file[MAX_PATH];
+    pw_get_last_user_filepath(last_file, MAX_PATH, host, port);
+    FILE *lfp = _wfopen(last_file, L"w");
+    if (lfp) {
+        fprintf(lfp, "%s\n", user);
+        fclose(lfp);
+    }
+
+    /* Remove legacy file if it exists */
+    wchar_t legacy[MAX_PATH];
+    pw_get_legacy_filepath(legacy, MAX_PATH, host, port);
+    _wremove(legacy);
+
+    dbg_log("pw_save_credential: Saved %s@%s:%d to %ls (%zu bytes, rem=%d, auto=%d)",
+            user, host, port, filepath, written, remember ? 1 : 0, autologin ? 1 : 0);
     return written > 0;
 }
 
-static bool pw_load_credential(const char *host, int port,
-                               char *out_user, size_t user_size,
-                               char *out_pass, size_t pass_size,
-                               bool *out_remember, bool *out_autologin)
+static bool pw_load_single_file(const wchar_t *filepath,
+                                char *out_user, size_t user_size,
+                                char *out_pass, size_t pass_size,
+                                bool *out_remember, bool *out_autologin)
 {
     if (out_user && user_size > 0) out_user[0] = '\0';
     if (out_pass && pass_size > 0) out_pass[0] = '\0';
     if (out_remember) *out_remember = false;
     if (out_autologin) *out_autologin = false;
-
-    if (!host || !*host)
-        return false;
-
-    wchar_t filepath[MAX_PATH];
-    pw_get_filepath(filepath, MAX_PATH, host, port);
 
     FILE *fp = _wfopen(filepath, L"rb");
     if (!fp)
@@ -1033,10 +1085,8 @@ static bool pw_load_credential(const char *host, int port,
                                   NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &data_out);
     sfree(cipher_buf);
 
-    if (!res || !data_out.pbData) {
-        dbg_log("pw_load_credential: CryptUnprotectData failed for %s:%d", host, port);
+    if (!res || !data_out.pbData)
         return false;
-    }
 
     char *pt = (char *)data_out.pbData;
     size_t pt_len = (size_t)data_out.cbData;
@@ -1092,12 +1142,114 @@ static bool pw_load_credential(const char *host, int port,
     LocalFree(data_out.pbData);
 
     if (found_pass) {
-        /* Backward compatibility with files without tags */
         if (!found_remember_tag && out_remember) *out_remember = true;
         if (!found_autologin_tag && out_autologin) *out_autologin = true;
     }
 
-    return found_pass;
+    return (found_user && found_pass);
+}
+
+static void json_escape_string(const char *src, char *dst, size_t dst_sz);
+
+static int pw_load_all_for_host(const char *host, int port,
+                                char *out_last_user, size_t last_user_sz,
+                                strbuf *out_json_users)
+{
+    if (out_last_user && last_user_sz > 0) out_last_user[0] = '\0';
+    if (!host || !*host) return 0;
+
+    wchar_t pw_dir[MAX_PATH];
+    pw_get_dir(pw_dir, MAX_PATH);
+
+    char safe_host[128];
+    pw_sanitize_filename_part(host, safe_host, sizeof(safe_host));
+    wchar_t w_host[128];
+    MultiByteToWideChar(CP_UTF8, 0, safe_host, -1, w_host, 128);
+
+    /* 1. Try reading last used username */
+    wchar_t last_file[MAX_PATH];
+    pw_get_last_user_filepath(last_file, MAX_PATH, host, port);
+    FILE *lfp = _wfopen(last_file, L"r");
+    if (lfp) {
+        char line[128];
+        if (fgets(line, sizeof(line), lfp)) {
+            char *nl = strpbrk(line, "\r\n");
+            if (nl) *nl = '\0';
+            if (out_last_user && line[0] != '\0') {
+                strncpy(out_last_user, line, last_user_sz - 1);
+                out_last_user[last_user_sz - 1] = '\0';
+            }
+        }
+        fclose(lfp);
+    }
+
+    int count = 0;
+    char first_user[128] = {0};
+
+    /* 2. Scan for multi-user files: pw\%s_%d_*.enc */
+    wchar_t search_pattern[MAX_PATH];
+    _snwprintf(search_pattern, MAX_PATH, L"%s\\%s_%d_*.enc", pw_dir, w_host, port > 0 ? port : 22);
+
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(search_pattern, &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                continue;
+
+            wchar_t filepath[MAX_PATH];
+            _snwprintf(filepath, MAX_PATH, L"%s\\%s", pw_dir, fd.cFileName);
+
+            char u[128] = {0}, p[256] = {0};
+            bool rem = false, autolog = false;
+            if (pw_load_single_file(filepath, u, sizeof(u), p, sizeof(p), &rem, &autolog)) {
+                if (count == 0) {
+                    strncpy(first_user, u, sizeof(first_user) - 1);
+                }
+                char esc_u[256], esc_p[512];
+                json_escape_string(u, esc_u, sizeof(esc_u));
+                json_escape_string(p, esc_p, sizeof(esc_p));
+
+                if (count > 0) put_byte(out_json_users, ',');
+                put_fmt(out_json_users, "\"%s\":{\"pass\":\"%s\",\"remember\":%s,\"autoLogin\":%s}",
+                            esc_u, esc_p, rem ? "true" : "false", autolog ? "true" : "false");
+                smemclr(p, sizeof(p));
+                smemclr(esc_p, sizeof(esc_p));
+                count++;
+            }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+    }
+
+    /* 3. Check legacy file: pw\%s_%d.enc */
+    wchar_t legacy_file[MAX_PATH];
+    pw_get_legacy_filepath(legacy_file, MAX_PATH, host, port);
+    if (GetFileAttributesW(legacy_file) != INVALID_FILE_ATTRIBUTES) {
+        char u[128] = {0}, p[256] = {0};
+        bool rem = false, autolog = false;
+        if (pw_load_single_file(legacy_file, u, sizeof(u), p, sizeof(p), &rem, &autolog)) {
+            if (count == 0) {
+                strncpy(first_user, u, sizeof(first_user) - 1);
+            }
+            char esc_u[256], esc_p[512];
+            json_escape_string(u, esc_u, sizeof(esc_u));
+            json_escape_string(p, esc_p, sizeof(esc_p));
+
+            if (count > 0) put_byte(out_json_users, ',');
+            put_fmt(out_json_users, "\"%s\":{\"pass\":\"%s\",\"remember\":%s,\"autoLogin\":%s}",
+                        esc_u, esc_p, rem ? "true" : "false", autolog ? "true" : "false");
+            smemclr(p, sizeof(p));
+            smemclr(esc_p, sizeof(esc_p));
+            count++;
+        }
+    }
+
+    if (out_last_user && out_last_user[0] == '\0' && first_user[0] != '\0') {
+        strncpy(out_last_user, first_user, last_user_sz - 1);
+        out_last_user[last_user_sz - 1] = '\0';
+    }
+
+    return count;
 }
 
 static void json_escape_string(const char *src, char *dst, size_t dst_sz)
@@ -1210,6 +1362,7 @@ static void session_cleanup_backend(WebKitSession *sess)
     sess->prompt_attempts = 0;
     sess->modal_remember = false;
     sess->modal_autologin = false;
+    sess->username_displayed = false;
 
     if (!sess->backend || sess->in_backend_free)
         return;
@@ -1539,6 +1692,12 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
                 const char *u = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
                 if (u && *u) {
                     prompt_set_result(pr, u);
+                    if (!sess->username_displayed) {
+                        session_write_terminal(sess, "login as: ");
+                        session_write_terminal(sess, u);
+                        session_write_terminal(sess, "\r\n");
+                        sess->username_displayed = true;
+                    }
                 } else {
                     all_filled = false;
                 }
@@ -1551,86 +1710,35 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
         }
     }
 
-    /* 2. Try loading credentials from pw/ directory */
-    char saved_user[128] = {0};
-    char saved_pass[256] = {0};
-    bool saved_remember = false;
-    bool saved_autologin = false;
-    bool has_saved = false;
-
-    if (host && *host) {
-        has_saved = pw_load_credential(host, port, saved_user, sizeof(saved_user),
-                                       saved_pass, sizeof(saved_pass),
-                                       &saved_remember, &saved_autologin);
-    }
-
-    /* 3. If autoLogin is enabled, credentials exist, and we haven't failed login */
-    if (has_saved && saved_autologin && !sess->tried_saved_pw && !sess->login_failed && saved_pass[0] != '\0') {
-        sess->tried_saved_pw = true;
-        sess->prompt_attempts++;
-        bool all_filled = true;
-
-        for (size_t i = 0; i < p->n_prompts; i++) {
-            prompt_t *pr = p->prompts[i];
-            if (pr->echo) {
-                const char *u = (saved_user[0] != '\0') ? saved_user : conf_get_str(sess->cfg, CONF_username);
-                if (u && *u) {
-                    prompt_set_result(pr, u);
-                    session_write_terminal(sess, pr->prompt);
-                    session_write_terminal(sess, u);
-                    session_write_terminal(sess, "\r\n");
-                } else {
-                    all_filled = false;
-                }
-            } else {
-                prompt_set_result(pr, saved_pass);
-                session_write_terminal(sess, pr->prompt);
-                session_write_terminal(sess, "\x1b[1;33m[使用已加密保存的凭据自动免密登录...]\x1b[0m\r\n");
-            }
-        }
-
-        smemclr(saved_pass, sizeof(saved_pass));
-
-        if (all_filled) {
-            p->spr = SPR_OK;
-            return SPR_OK;
-        }
-    }
 
     /* 4. Pop up WebKit SSH Auth modal dialog */
     if (sess->hwnd) {
         sess->cur_prompts = p;
 
-        const char *u = (saved_user[0] != '\0') ? saved_user :
-                        ((sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user :
-                         conf_get_str(sess->cfg, CONF_username));
-        if (!u) u = "";
+        char last_user[128] = {0};
+        strbuf *json_users = strbuf_new_nm();
+        pw_load_all_for_host(host, port, last_user, sizeof(last_user), json_users);
 
-        const char *pref_pass = (has_saved && saved_remember && !sess->login_failed) ? saved_pass : "";
+        const char *cfg_user = conf_get_str(sess->cfg, CONF_username);
+        const char *cur_u = (last_user[0] != '\0') ? last_user :
+                            ((cfg_user && *cfg_user) ? cfg_user : sess->temp_prompt_user);
+
         const char *err_msg = sess->login_failed ? "用户名或密码错误，请重新输入" : "";
 
-        char esc_host[256], esc_user[256], esc_pass[512], esc_err[256];
+        char esc_host[256], esc_user[256], esc_err[256];
         json_escape_string(host ? host : "", esc_host, sizeof(esc_host));
-        json_escape_string(u, esc_user, sizeof(esc_user));
-        json_escape_string(pref_pass, esc_pass, sizeof(esc_pass));
+        json_escape_string(cur_u ? cur_u : "", esc_user, sizeof(esc_user));
         json_escape_string(err_msg, esc_err, sizeof(esc_err));
 
-        char json_buf[1536];
-        snprintf(json_buf, sizeof(json_buf),
-                 "P%d:{\"host\":\"%s\",\"port\":%d,\"user\":\"%s\",\"pass\":\"%s\",\"remember\":%s,\"autoLogin\":%s,\"error\":\"%s\"}",
-                 sess->id,
-                 esc_host,
-                 port > 0 ? port : 22,
-                 esc_user,
-                 esc_pass,
-                 (has_saved ? (saved_remember ? "true" : "false") : "true"),
-                 (has_saved ? (saved_autologin ? "true" : "false") : "false"),
-                 esc_err);
+        strbuf *msg = strbuf_new_nm();
+        put_fmt(msg, "P%d:{\"host\":\"%s\",\"port\":%d,\"currentUser\":\"%s\",\"users\":{%s},\"error\":\"%s\"}",
+                sess->id, esc_host, port > 0 ? port : 22, esc_user,
+                json_users->s ? json_users->s : "", esc_err);
 
-        smemclr(saved_pass, sizeof(saved_pass));
-        smemclr(esc_pass, sizeof(esc_pass));
+        strbuf_free(json_users);
 
-        webview_host_send_to_window(sess->hwnd, json_buf);
+        webview_host_send_to_window(sess->hwnd, msg->s);
+        strbuf_free(msg);
         return SPR_INCOMPLETE;
     }
 
@@ -1691,7 +1799,8 @@ static void webkit_seat_notify_session_started(Seat *seat)
     } else if (!sess->modal_remember && sess->temp_prompt_pass[0] != '\0') {
         const char *host = conf_get_str(sess->cfg, CONF_host);
         int port = conf_get_int(sess->cfg, CONF_port);
-        pw_delete_credential(host, port);
+        const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
+        pw_delete_credential(host, port, user);
     }
 
     smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
@@ -2458,6 +2567,12 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                         if (pr->echo) {
                             const char *u = (user[0] != '\0') ? user : conf_get_str(sess->cfg, CONF_username);
                             prompt_set_result(pr, u ? u : "");
+                            if (!sess->username_displayed && u && *u) {
+                                session_write_terminal(sess, "login as: ");
+                                session_write_terminal(sess, u);
+                                session_write_terminal(sess, "\r\n");
+                                sess->username_displayed = true;
+                            }
                         } else {
                             prompt_set_result(pr, pass);
                         }

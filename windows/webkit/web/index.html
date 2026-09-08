@@ -669,6 +669,17 @@
       align-items: center;
       gap: 8px;
     }
+    .ssh-auth-countdown {
+      background: rgba(79, 193, 255, 0.12);
+      border: 1px solid rgba(79, 193, 255, 0.35);
+      color: #9cdcfe;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
     .ssh-auth-field {
       display: flex;
       flex-direction: column;
@@ -923,9 +934,17 @@
           </svg>
           <span id="ssh-auth-error-text">用户名或密码错误，请重新输入</span>
         </div>
+        <div id="ssh-auth-countdown-banner" class="ssh-auth-countdown" style="display: none;">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span>将在 <b id="ssh-auth-countdown-secs" style="color: #4fc1ff; font-size: 13px;">5</b> 秒后自动登录 (修改内容将取消倒计时)</span>
+        </div>
         <div class="ssh-auth-field">
           <label for="ssh-auth-user">用户名 (Username)</label>
-          <input type="text" id="ssh-auth-user" autocomplete="username" spellcheck="false" placeholder="例如 root" />
+          <input type="text" id="ssh-auth-user" list="ssh-auth-user-datalist" autocomplete="off" spellcheck="false" placeholder="输入用户名或从已保存列表中选择" />
+          <datalist id="ssh-auth-user-datalist"></datalist>
         </div>
         <div class="ssh-auth-field">
           <label for="ssh-auth-pass">密码 (Password)</label>
@@ -2586,13 +2605,20 @@
 
       // SSH Authentication Modal Logic
       let sshAuthActiveSessionId = null;
+      let sshAuthUsers = {};
+      let sshAuthCountdownTimer = null;
+      let sshAuthCountdownRemaining = 5;
+
       const sshAuthModalEl = document.getElementById('ssh-auth-modal');
       const sshAuthUserEl = document.getElementById('ssh-auth-user');
+      const sshAuthDatalistEl = document.getElementById('ssh-auth-user-datalist');
       const sshAuthPassEl = document.getElementById('ssh-auth-pass');
       const sshAuthRememberEl = document.getElementById('ssh-auth-remember');
       const sshAuthAutologinEl = document.getElementById('ssh-auth-autologin');
       const sshAuthErrorBannerEl = document.getElementById('ssh-auth-error-banner');
       const sshAuthErrorTextEl = document.getElementById('ssh-auth-error-text');
+      const sshAuthCountdownBannerEl = document.getElementById('ssh-auth-countdown-banner');
+      const sshAuthCountdownSecsEl = document.getElementById('ssh-auth-countdown-secs');
       const sshAuthTargetTagEl = document.getElementById('ssh-auth-target-tag');
       const sshAuthEyeBtn = document.getElementById('ssh-auth-eye-btn');
       const sshAuthEyeIcon = document.getElementById('ssh-auth-eye-icon');
@@ -2600,27 +2626,127 @@
       const sshAuthCancelBtn = document.getElementById('ssh-auth-cancel-btn');
       const sshAuthSubmitBtn = document.getElementById('ssh-auth-submit-btn');
 
+      function stopSshAuthCountdown() {
+        if (sshAuthCountdownTimer) {
+          clearInterval(sshAuthCountdownTimer);
+          sshAuthCountdownTimer = null;
+        }
+        if (sshAuthCountdownBannerEl) {
+          sshAuthCountdownBannerEl.style.display = 'none';
+        }
+        if (sshAuthSubmitBtn) {
+          sshAuthSubmitBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+              <polyline points="10 17 15 12 10 7"></polyline>
+              <line x1="15" y1="12" x2="3" y2="12"></line>
+            </svg>
+            连接 / 登录`;
+        }
+      }
+
+      function startSshAuthCountdown(secs) {
+        stopSshAuthCountdown();
+        sshAuthCountdownRemaining = secs || 5;
+        if (sshAuthCountdownBannerEl) {
+          sshAuthCountdownBannerEl.style.display = 'flex';
+        }
+        if (sshAuthCountdownSecsEl) {
+          sshAuthCountdownSecsEl.textContent = sshAuthCountdownRemaining;
+        }
+        if (sshAuthSubmitBtn) {
+          sshAuthSubmitBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+              <polyline points="10 17 15 12 10 7"></polyline>
+              <line x1="15" y1="12" x2="3" y2="12"></line>
+            </svg>
+            立即登录 (${sshAuthCountdownRemaining}s)`;
+        }
+
+        sshAuthCountdownTimer = setInterval(() => {
+          sshAuthCountdownRemaining--;
+          if (sshAuthCountdownRemaining <= 0) {
+            stopSshAuthCountdown();
+            submitSshAuth();
+          } else {
+            if (sshAuthCountdownSecsEl) {
+              sshAuthCountdownSecsEl.textContent = sshAuthCountdownRemaining;
+            }
+            if (sshAuthSubmitBtn) {
+              sshAuthSubmitBtn.innerHTML = `
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                  <polyline points="10 17 15 12 10 7"></polyline>
+                  <line x1="15" y1="12" x2="3" y2="12"></line>
+                </svg>
+                立即登录 (${sshAuthCountdownRemaining}s)`;
+            }
+          }
+        }, 1000);
+      }
+
+      function applyCredentialsForUser(u) {
+        if (sshAuthUsers && u && sshAuthUsers[u]) {
+          const cred = sshAuthUsers[u];
+          if (sshAuthPassEl) {
+            sshAuthPassEl.value = cred.pass || '';
+          }
+          if (sshAuthRememberEl) {
+            sshAuthRememberEl.checked = cred.remember !== undefined ? !!cred.remember : true;
+          }
+          if (sshAuthAutologinEl) {
+            sshAuthAutologinEl.checked = cred.autoLogin !== undefined ? !!cred.autoLogin : false;
+          }
+          return true;
+        }
+        return false;
+      }
+
       function openSshAuthModal(sessId, data) {
+        stopSshAuthCountdown();
         sshAuthActiveSessionId = sessId;
+        sshAuthUsers = data.users || {};
+
         if (sshAuthTargetTagEl) {
           sshAuthTargetTagEl.textContent = `${data.host || ''}:${data.port || 22}`;
         }
-        if (sshAuthUserEl) {
-          sshAuthUserEl.value = data.user || '';
+
+        // Populate datalist with all saved accounts for this host
+        if (sshAuthDatalistEl) {
+          sshAuthDatalistEl.innerHTML = '';
+          const userKeys = Object.keys(sshAuthUsers);
+          for (const u of userKeys) {
+            const opt = document.createElement('option');
+            opt.value = u;
+            sshAuthDatalistEl.appendChild(opt);
+          }
         }
+
+        let selectedUser = (data.currentUser && data.currentUser.trim()) ? data.currentUser.trim() : '';
+        if (!selectedUser) {
+          const userKeys = Object.keys(sshAuthUsers);
+          if (userKeys.length > 0) selectedUser = userKeys[0];
+        }
+
+        if (sshAuthUserEl) {
+          sshAuthUserEl.value = selectedUser;
+        }
+
+        const hasMatchedCred = applyCredentialsForUser(selectedUser);
+        if (!hasMatchedCred) {
+          if (sshAuthPassEl) sshAuthPassEl.value = '';
+          if (sshAuthRememberEl) sshAuthRememberEl.checked = true;
+          if (sshAuthAutologinEl) sshAuthAutologinEl.checked = false;
+        }
+
         if (sshAuthPassEl) {
-          sshAuthPassEl.value = data.pass || '';
           sshAuthPassEl.type = 'password';
           if (sshAuthEyeIcon) {
             sshAuthEyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
           }
         }
-        if (sshAuthRememberEl) {
-          sshAuthRememberEl.checked = data.remember !== undefined ? !!data.remember : true;
-        }
-        if (sshAuthAutologinEl) {
-          sshAuthAutologinEl.checked = data.autoLogin !== undefined ? !!data.autoLogin : false;
-        }
+
         if (data.error && data.error.trim()) {
           if (sshAuthErrorTextEl) sshAuthErrorTextEl.textContent = data.error;
           if (sshAuthErrorBannerEl) sshAuthErrorBannerEl.style.display = 'flex';
@@ -2632,18 +2758,31 @@
           sshAuthModalEl.style.display = 'flex';
         }
 
-        setTimeout(() => {
-          if (sshAuthUserEl && !sshAuthUserEl.value.trim()) {
-            sshAuthUserEl.focus();
-            sshAuthUserEl.select();
-          } else if (sshAuthPassEl) {
-            sshAuthPassEl.focus();
-            sshAuthPassEl.select();
-          }
-        }, 50);
+        // Auto-login countdown check:
+        // Must have matched credentials, autoLogin checked, password present, and NO login error!
+        const shouldCountdown = !data.error &&
+                                hasMatchedCred &&
+                                sshAuthAutologinEl && sshAuthAutologinEl.checked &&
+                                sshAuthPassEl && sshAuthPassEl.value.length > 0;
+
+        if (shouldCountdown) {
+          startSshAuthCountdown(5);
+        } else {
+          stopSshAuthCountdown();
+          setTimeout(() => {
+            if (sshAuthUserEl && !sshAuthUserEl.value.trim()) {
+              sshAuthUserEl.focus();
+              sshAuthUserEl.select();
+            } else if (sshAuthPassEl) {
+              sshAuthPassEl.focus();
+              sshAuthPassEl.select();
+            }
+          }, 50);
+        }
       }
 
       function closeSshAuthModal(cancelled) {
+        stopSshAuthCountdown();
         if (!sshAuthModalEl || sshAuthModalEl.style.display === 'none') return;
         sshAuthModalEl.style.display = 'none';
         const sid = sshAuthActiveSessionId;
@@ -2657,6 +2796,7 @@
       }
 
       function submitSshAuth() {
+        stopSshAuthCountdown();
         if (sshAuthActiveSessionId === null) return;
         const user = sshAuthUserEl ? sshAuthUserEl.value.trim() : '';
         const pass = sshAuthPassEl ? sshAuthPassEl.value : '';
@@ -2681,14 +2821,39 @@
         }
       }
 
+      // Dynamic real-time password matching when typing or selecting username
+      if (sshAuthUserEl) {
+        sshAuthUserEl.addEventListener('input', () => {
+          stopSshAuthCountdown();
+          const u = sshAuthUserEl.value.trim();
+          if (!applyCredentialsForUser(u)) {
+            if (sshAuthPassEl) sshAuthPassEl.value = '';
+            if (sshAuthAutologinEl) sshAuthAutologinEl.checked = false;
+          }
+        });
+        sshAuthUserEl.addEventListener('change', () => {
+          stopSshAuthCountdown();
+          const u = sshAuthUserEl.value.trim();
+          applyCredentialsForUser(u);
+        });
+      }
+
+      if (sshAuthPassEl) {
+        sshAuthPassEl.addEventListener('input', () => {
+          stopSshAuthCountdown();
+        });
+      }
+
       // Link checkboxes: autologin requires remember
       if (sshAuthAutologinEl && sshAuthRememberEl) {
         sshAuthAutologinEl.addEventListener('change', () => {
+          stopSshAuthCountdown();
           if (sshAuthAutologinEl.checked) {
             sshAuthRememberEl.checked = true;
           }
         });
         sshAuthRememberEl.addEventListener('change', () => {
+          stopSshAuthCountdown();
           if (!sshAuthRememberEl.checked) {
             sshAuthAutologinEl.checked = false;
           }
