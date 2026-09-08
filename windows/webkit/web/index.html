@@ -594,6 +594,172 @@
     .mle-btn-primary:hover {
       background: #1177bb;
     }
+
+    /* SSH Authentication Modal Dialog */
+    .ssh-auth-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(2px);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .ssh-auth-dialog {
+      background: #252526;
+      border: 1px solid #4f4f4f;
+      border-radius: 8px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      width: 440px;
+      max-width: 92vw;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: sshModalFadeIn 0.15s ease-out;
+    }
+    @keyframes sshModalFadeIn {
+      from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .ssh-auth-header {
+      padding: 10px 14px;
+      background: #2d2d2d;
+      border-bottom: 1px solid #3c3c3c;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    .ssh-auth-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .ssh-auth-target-tag {
+      font-size: 11px;
+      color: #9cdcfe;
+      background: rgba(156, 220, 254, 0.12);
+      border: 1px solid rgba(156, 220, 254, 0.25);
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-weight: normal;
+    }
+    .ssh-auth-body {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .ssh-auth-error {
+      background: rgba(244, 135, 113, 0.12);
+      border: 1px solid rgba(244, 135, 113, 0.35);
+      color: #f48771;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .ssh-auth-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .ssh-auth-field label {
+      font-size: 12px;
+      color: #cccccc;
+      font-weight: 500;
+    }
+    .ssh-auth-field input[type="text"],
+    .ssh-auth-field input[type="password"] {
+      width: 100%;
+      background: #1e1e1e;
+      border: 1px solid #3c3c3c;
+      border-radius: 4px;
+      color: #d4d4d4;
+      font-size: 13px;
+      padding: 7px 10px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s;
+    }
+    .ssh-auth-field input[type="text"]:focus,
+    .ssh-auth-field input[type="password"]:focus {
+      border-color: #0e639c;
+    }
+    .ssh-auth-pass-wrap {
+      position: relative;
+      width: 100%;
+    }
+    .ssh-auth-pass-wrap input {
+      padding-right: 36px !important;
+    }
+    .ssh-auth-eye-btn {
+      position: absolute;
+      right: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      padding: 5px 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 3px;
+    }
+    .ssh-auth-eye-btn:hover {
+      color: #ddd;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .ssh-auth-options {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+      padding-top: 8px;
+      border-top: 1px solid #333333;
+    }
+    .ssh-auth-checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #bbbbbb;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ssh-auth-checkbox-label input[type="checkbox"] {
+      cursor: pointer;
+      accent-color: #0e639c;
+    }
+    .ssh-auth-footer {
+      padding: 10px 18px;
+      background: #202020;
+      border-top: 1px solid #333333;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .ssh-auth-hint {
+      font-size: 11px;
+      color: #777777;
+    }
+    .ssh-auth-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
   </style>
 </head>
 <body>
@@ -726,6 +892,75 @@
               <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
             </svg>
             发送 / 粘贴 (Ctrl+Enter)
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SSH Authentication Modal Dialog -->
+  <div id="ssh-auth-modal" class="ssh-auth-backdrop" style="display: none;">
+    <div class="ssh-auth-dialog">
+      <div class="ssh-auth-header">
+        <div class="ssh-auth-title">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span id="ssh-auth-title-text">SSH 身份验证</span>
+          <span id="ssh-auth-target-tag" class="ssh-auth-target-tag"></span>
+        </div>
+        <div class="ssh-auth-header-actions">
+          <button id="ssh-auth-close-btn" class="mle-btn-icon" title="取消 (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="ssh-auth-body">
+        <div id="ssh-auth-error-banner" class="ssh-auth-error" style="display: none;">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#f48771" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          <span id="ssh-auth-error-text">用户名或密码错误，请重新输入</span>
+        </div>
+        <div class="ssh-auth-field">
+          <label for="ssh-auth-user">用户名 (Username)</label>
+          <input type="text" id="ssh-auth-user" autocomplete="username" spellcheck="false" placeholder="例如 root" />
+        </div>
+        <div class="ssh-auth-field">
+          <label for="ssh-auth-pass">密码 (Password)</label>
+          <div class="ssh-auth-pass-wrap">
+            <input type="password" id="ssh-auth-pass" autocomplete="current-password" spellcheck="false" placeholder="请输入密码" />
+            <button type="button" id="ssh-auth-eye-btn" class="ssh-auth-eye-btn" title="显示/隐藏密码" tabindex="-1">
+              <svg id="ssh-auth-eye-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="ssh-auth-options">
+          <label class="ssh-auth-checkbox-label">
+            <input type="checkbox" id="ssh-auth-remember" checked />
+            <span>记住密码 (本地 DPAPI 安全加密)</span>
+          </label>
+          <label class="ssh-auth-checkbox-label">
+            <input type="checkbox" id="ssh-auth-autologin" />
+            <span>下次免密登录 (连接时自动验证)</span>
+          </label>
+        </div>
+      </div>
+      <div class="ssh-auth-footer">
+        <div class="ssh-auth-hint">按 Enter 快捷登录，按 Esc 取消</div>
+        <div class="ssh-auth-actions">
+          <button id="ssh-auth-cancel-btn" class="mle-btn mle-btn-secondary">取消 (Esc)</button>
+          <button id="ssh-auth-submit-btn" class="mle-btn mle-btn-primary">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+              <polyline points="10 17 15 12 10 7"></polyline>
+              <line x1="15" y1="12" x2="3" y2="12"></line>
+            </svg>
+            连接 / 登录
           </button>
         </div>
       </div>
@@ -1778,6 +2013,10 @@
     function removeSessionTab(id) {
       if (!sessions[id]) return;
 
+      if (typeof closeSshAuthModal === 'function' && sshAuthActiveSessionId === id) {
+        closeSshAuthModal(false);
+      }
+
       const cur = sessions[id];
       const gid = cur.groupId;
 
@@ -2045,6 +2284,19 @@
             if (sessions[id]) {
               sessions[id].autoReconnect = enabled;
               dockManager.updateAllGroupAutoReconnectButtons();
+            }
+          }
+        } else if (type === 'P') {
+          // SSH Auth Modal request: P{id}:{json}
+          const colon = payload.indexOf(':');
+          if (colon !== -1) {
+            const id = parseInt(payload.slice(0, colon), 10);
+            const jsonStr = payload.slice(colon + 1);
+            try {
+              const data = JSON.parse(jsonStr);
+              openSshAuthModal(id, data);
+            } catch (e) {
+              console.error('Failed to parse SSH auth payload:', e);
             }
           }
         }
@@ -2332,9 +2584,152 @@
       }
       if (mleSendBtn) mleSendBtn.addEventListener('click', sendMultiLineText);
 
-      // Window/Document focus routing: ensure active terminal is focused (guarded by modal)
+      // SSH Authentication Modal Logic
+      let sshAuthActiveSessionId = null;
+      const sshAuthModalEl = document.getElementById('ssh-auth-modal');
+      const sshAuthUserEl = document.getElementById('ssh-auth-user');
+      const sshAuthPassEl = document.getElementById('ssh-auth-pass');
+      const sshAuthRememberEl = document.getElementById('ssh-auth-remember');
+      const sshAuthAutologinEl = document.getElementById('ssh-auth-autologin');
+      const sshAuthErrorBannerEl = document.getElementById('ssh-auth-error-banner');
+      const sshAuthErrorTextEl = document.getElementById('ssh-auth-error-text');
+      const sshAuthTargetTagEl = document.getElementById('ssh-auth-target-tag');
+      const sshAuthEyeBtn = document.getElementById('ssh-auth-eye-btn');
+      const sshAuthEyeIcon = document.getElementById('ssh-auth-eye-icon');
+      const sshAuthCloseBtn = document.getElementById('ssh-auth-close-btn');
+      const sshAuthCancelBtn = document.getElementById('ssh-auth-cancel-btn');
+      const sshAuthSubmitBtn = document.getElementById('ssh-auth-submit-btn');
+
+      function openSshAuthModal(sessId, data) {
+        sshAuthActiveSessionId = sessId;
+        if (sshAuthTargetTagEl) {
+          sshAuthTargetTagEl.textContent = `${data.host || ''}:${data.port || 22}`;
+        }
+        if (sshAuthUserEl) {
+          sshAuthUserEl.value = data.user || '';
+        }
+        if (sshAuthPassEl) {
+          sshAuthPassEl.value = data.pass || '';
+          sshAuthPassEl.type = 'password';
+          if (sshAuthEyeIcon) {
+            sshAuthEyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+          }
+        }
+        if (sshAuthRememberEl) {
+          sshAuthRememberEl.checked = data.remember !== undefined ? !!data.remember : true;
+        }
+        if (sshAuthAutologinEl) {
+          sshAuthAutologinEl.checked = data.autoLogin !== undefined ? !!data.autoLogin : false;
+        }
+        if (data.error && data.error.trim()) {
+          if (sshAuthErrorTextEl) sshAuthErrorTextEl.textContent = data.error;
+          if (sshAuthErrorBannerEl) sshAuthErrorBannerEl.style.display = 'flex';
+        } else {
+          if (sshAuthErrorBannerEl) sshAuthErrorBannerEl.style.display = 'none';
+        }
+
+        if (sshAuthModalEl) {
+          sshAuthModalEl.style.display = 'flex';
+        }
+
+        setTimeout(() => {
+          if (sshAuthUserEl && !sshAuthUserEl.value.trim()) {
+            sshAuthUserEl.focus();
+            sshAuthUserEl.select();
+          } else if (sshAuthPassEl) {
+            sshAuthPassEl.focus();
+            sshAuthPassEl.select();
+          }
+        }, 50);
+      }
+
+      function closeSshAuthModal(cancelled) {
+        if (!sshAuthModalEl || sshAuthModalEl.style.display === 'none') return;
+        sshAuthModalEl.style.display = 'none';
+        const sid = sshAuthActiveSessionId;
+        sshAuthActiveSessionId = null;
+        if (cancelled && sid !== null) {
+          sendToHost('P', `${sid}:cancel`);
+        }
+        if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {
+          sessions[activeGlobalSessionId].term.focus();
+        }
+      }
+
+      function submitSshAuth() {
+        if (sshAuthActiveSessionId === null) return;
+        const user = sshAuthUserEl ? sshAuthUserEl.value.trim() : '';
+        const pass = sshAuthPassEl ? sshAuthPassEl.value : '';
+        const remember = sshAuthRememberEl ? sshAuthRememberEl.checked : false;
+        const autoLogin = sshAuthAutologinEl ? sshAuthAutologinEl.checked : false;
+
+        const payload = JSON.stringify({
+          user: user,
+          pass: pass,
+          remember: remember,
+          autoLogin: autoLogin
+        });
+
+        const sid = sshAuthActiveSessionId;
+        sshAuthActiveSessionId = null;
+        if (sshAuthModalEl) sshAuthModalEl.style.display = 'none';
+
+        sendToHost('P', `${sid}:${payload}`);
+
+        if (sessions[sid]) {
+          sessions[sid].term.focus();
+        }
+      }
+
+      // Link checkboxes: autologin requires remember
+      if (sshAuthAutologinEl && sshAuthRememberEl) {
+        sshAuthAutologinEl.addEventListener('change', () => {
+          if (sshAuthAutologinEl.checked) {
+            sshAuthRememberEl.checked = true;
+          }
+        });
+        sshAuthRememberEl.addEventListener('change', () => {
+          if (!sshAuthRememberEl.checked) {
+            sshAuthAutologinEl.checked = false;
+          }
+        });
+      }
+
+      // Eye toggle
+      if (sshAuthEyeBtn && sshAuthPassEl && sshAuthEyeIcon) {
+        sshAuthEyeBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const isPass = sshAuthPassEl.type === 'password';
+          sshAuthPassEl.type = isPass ? 'text' : 'password';
+          sshAuthEyeIcon.innerHTML = isPass ?
+            '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>' :
+            '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+        });
+      }
+
+      // Buttons & Key shortcuts in modal
+      if (sshAuthCloseBtn) sshAuthCloseBtn.addEventListener('click', () => closeSshAuthModal(true));
+      if (sshAuthCancelBtn) sshAuthCancelBtn.addEventListener('click', () => closeSshAuthModal(true));
+      if (sshAuthSubmitBtn) sshAuthSubmitBtn.addEventListener('click', submitSshAuth);
+
+      if (sshAuthModalEl) {
+        sshAuthModalEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            submitSshAuth();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeSshAuthModal(true);
+          }
+        });
+      }
+
+      // Window/Document focus routing: ensure active terminal is focused (guarded by modals)
       window.addEventListener('focus', () => {
-        if (mleModalEl && mleModalEl.style.display !== 'none') {
+        if ((mleModalEl && mleModalEl.style.display !== 'none') ||
+            (sshAuthModalEl && sshAuthModalEl.style.display !== 'none')) {
           return;
         }
         if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {
@@ -2343,7 +2738,8 @@
       });
 
       document.addEventListener('keydown', (e) => {
-        if (mleModalEl && mleModalEl.style.display !== 'none') {
+        if ((mleModalEl && mleModalEl.style.display !== 'none') ||
+            (sshAuthModalEl && sshAuthModalEl.style.display !== 'none')) {
           return;
         }
         if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {

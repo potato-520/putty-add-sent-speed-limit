@@ -216,6 +216,10 @@ typedef struct WebKitSession {
     char temp_prompt_user[128];
     char temp_prompt_pass[256];
     bool tried_saved_pw;
+    bool modal_remember;
+    bool modal_autologin;
+    bool login_failed;
+    int prompt_attempts;
 
     struct WebKitSession *next;
 } WebKitSession;
@@ -910,17 +914,36 @@ static void pw_get_filepath(wchar_t *out_path, size_t max_len, const char *host,
     _snwprintf(out_path, max_len, L"%s\\%s_%d.enc", pw_dir, w_safe_host, port > 0 ? port : 22);
 }
 
-static bool pw_save_credential(const char *host, int port, const char *user, const char *pass)
+static void pw_delete_credential(const char *host, int port)
 {
-    if (!host || !*host || !pass || !*pass)
+    if (!host || !*host)
+        return;
+    wchar_t filepath[MAX_PATH];
+    pw_get_filepath(filepath, MAX_PATH, host, port);
+    _wremove(filepath);
+    dbg_log("pw_delete_credential: Removed %ls for %s:%d", filepath, host, port);
+}
+
+static bool pw_save_credential(const char *host, int port, const char *user, const char *pass,
+                               bool remember, bool autologin)
+{
+    if (!host || !*host)
         return false;
 
     wchar_t filepath[MAX_PATH];
     pw_get_filepath(filepath, MAX_PATH, host, port);
 
+    if (!remember) {
+        _wremove(filepath);
+        return true;
+    }
+
+    if (!pass || !*pass)
+        return false;
+
     char plaintext[512];
-    int pt_len = snprintf(plaintext, sizeof(plaintext), "USER:%s\nPASS:%s\n",
-                          user ? user : "", pass);
+    int pt_len = snprintf(plaintext, sizeof(plaintext), "USER:%s\nPASS:%s\nREMEMBER:%d\nAUTOLOGIN:%d\n",
+                          user ? user : "", pass, remember ? 1 : 0, autologin ? 1 : 0);
     if (pt_len <= 0 || (size_t)pt_len >= sizeof(plaintext))
         return false;
 
@@ -952,14 +975,21 @@ static bool pw_save_credential(const char *host, int port, const char *user, con
     fclose(fp);
     LocalFree(data_out.pbData);
 
-    dbg_log("pw_save_credential: Saved %s:%d to %ls (%zu bytes)", host, port, filepath, written);
+    dbg_log("pw_save_credential: Saved %s:%d to %ls (%zu bytes, rem=%d, auto=%d)",
+            host, port, filepath, written, remember ? 1 : 0, autologin ? 1 : 0);
     return written > 0;
 }
 
 static bool pw_load_credential(const char *host, int port,
                                char *out_user, size_t user_size,
-                               char *out_pass, size_t pass_size)
+                               char *out_pass, size_t pass_size,
+                               bool *out_remember, bool *out_autologin)
 {
+    if (out_user && user_size > 0) out_user[0] = '\0';
+    if (out_pass && pass_size > 0) out_pass[0] = '\0';
+    if (out_remember) *out_remember = false;
+    if (out_autologin) *out_autologin = false;
+
     if (!host || !*host)
         return false;
 
@@ -1013,6 +1043,8 @@ static bool pw_load_credential(const char *host, int port,
 
     bool found_user = false;
     bool found_pass = false;
+    bool found_remember_tag = false;
+    bool found_autologin_tag = false;
 
     char *line = pt;
     char *end = pt + pt_len;
@@ -1039,6 +1071,16 @@ static bool pw_load_credential(const char *host, int port,
                 out_pass[cpy_len] = '\0';
                 found_pass = true;
             }
+        } else if (line_len >= 9 && !memcmp(line, "REMEMBER:", 9)) {
+            if (out_remember) {
+                *out_remember = (line[9] == '1' || line[9] == 't');
+                found_remember_tag = true;
+            }
+        } else if (line_len >= 10 && !memcmp(line, "AUTOLOGIN:", 10)) {
+            if (out_autologin) {
+                *out_autologin = (line[10] == '1' || line[10] == 't');
+                found_autologin_tag = true;
+            }
         }
 
         while (eol < end && (*eol == '\n' || *eol == '\r'))
@@ -1049,7 +1091,106 @@ static bool pw_load_credential(const char *host, int port,
     smemclr(data_out.pbData, data_out.cbData);
     LocalFree(data_out.pbData);
 
+    if (found_pass) {
+        /* Backward compatibility with files without tags */
+        if (!found_remember_tag && out_remember) *out_remember = true;
+        if (!found_autologin_tag && out_autologin) *out_autologin = true;
+    }
+
     return found_pass;
+}
+
+static void json_escape_string(const char *src, char *dst, size_t dst_sz)
+{
+    if (!dst || dst_sz == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j + 2 < dst_sz; i++) {
+        char c = src[i];
+        if (c == '\\' || c == '"') {
+            dst[j++] = '\\';
+            dst[j++] = c;
+        } else if (c == '\n') {
+            dst[j++] = '\\';
+            dst[j++] = 'n';
+        } else if (c == '\r') {
+            dst[j++] = '\\';
+            dst[j++] = 'r';
+        } else if (c == '\t') {
+            dst[j++] = '\\';
+            dst[j++] = 't';
+        } else {
+            dst[j++] = c;
+        }
+    }
+    dst[j] = '\0';
+}
+
+static void parse_auth_json(const char *json,
+                            char *out_user, size_t user_sz,
+                            char *out_pass, size_t pass_sz,
+                            bool *out_remember, bool *out_autologin)
+{
+    if (out_user && user_sz > 0) out_user[0] = '\0';
+    if (out_pass && pass_sz > 0) out_pass[0] = '\0';
+    if (out_remember) *out_remember = false;
+    if (out_autologin) *out_autologin = false;
+
+    if (!json || !*json) return;
+
+    /* Extract user */
+    const char *p = strstr(json, "\"user\":");
+    if (p) {
+        p += 7;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '"') {
+            p++;
+            size_t idx = 0;
+            while (*p && *p != '"' && idx + 1 < user_sz) {
+                if (*p == '\\' && *(p + 1)) {
+                    p++;
+                }
+                out_user[idx++] = *p++;
+            }
+            out_user[idx] = '\0';
+        }
+    }
+
+    /* Extract pass */
+    p = strstr(json, "\"pass\":");
+    if (p) {
+        p += 7;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '"') {
+            p++;
+            size_t idx = 0;
+            while (*p && *p != '"' && idx + 1 < pass_sz) {
+                if (*p == '\\' && *(p + 1)) {
+                    p++;
+                }
+                out_pass[idx++] = *p++;
+            }
+            out_pass[idx] = '\0';
+        }
+    }
+
+    /* Extract remember */
+    p = strstr(json, "\"remember\":");
+    if (p && out_remember) {
+        p += 11;
+        while (*p == ' ' || *p == '\t') p++;
+        *out_remember = (!strncmp(p, "true", 4) || *p == '1');
+    }
+
+    /* Extract autoLogin */
+    p = strstr(json, "\"autoLogin\":");
+    if (p && out_autologin) {
+        p += 12;
+        while (*p == ' ' || *p == '\t') p++;
+        *out_autologin = (!strncmp(p, "true", 4) || *p == '1');
+    }
 }
 
 static void session_cleanup_backend(WebKitSession *sess)
@@ -1065,6 +1206,10 @@ static void session_cleanup_backend(WebKitSession *sess)
     smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
     sess->temp_prompt_pass[0] = '\0';
     sess->temp_prompt_user[0] = '\0';
+    sess->login_failed = false;
+    sess->prompt_attempts = 0;
+    sess->modal_remember = false;
+    sess->modal_autologin = false;
 
     if (!sess->backend || sess->in_backend_free)
         return;
@@ -1250,6 +1395,13 @@ static size_t webkit_seat_output(Seat *seat, SeatOutputType type,
 {
     if (len > 0) {
         WebKitSession *sess = session_from_seat(seat);
+        if (sess && data) {
+            if (strstr((const char *)data, "Access denied") ||
+                strstr((const char *)data, "Authentication failed") ||
+                strstr((const char *)data, "Login incorrect")) {
+                sess->login_failed = true;
+            }
+        }
         session_record_output(sess, data, len);
         if (sess->log_fp) {
             fwrite(data, 1, len, sess->log_fp);
@@ -1369,49 +1521,120 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
     if (spr.kind != SPRK_INCOMPLETE)
         return spr;
 
-    /* 2. Try loading credentials from pw/ directory if not tried yet */
-    if (!sess->tried_saved_pw && host && *host) {
-        char saved_user[128] = {0};
-        char saved_pass[256] = {0};
-        if (pw_load_credential(host, port, saved_user, sizeof(saved_user), saved_pass, sizeof(saved_pass))) {
-            sess->tried_saved_pw = true;
-            bool all_filled = true;
+    /* Detect if previous attempt failed (prompt called again without session_started having run) */
+    if (sess->prompt_attempts > 0 && !sess->is_connected) {
+        sess->login_failed = true;
+        smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
+        sess->temp_prompt_pass[0] = '\0';
+    }
 
-            for (size_t i = 0; i < p->n_prompts; i++) {
-                prompt_t *pr = p->prompts[i];
-                if (pr->echo) {
-                    /* Username prompt */
-                    const char *u = (saved_user[0] != '\0') ? saved_user : conf_get_str(sess->cfg, CONF_username);
-                    if (u && *u) {
-                        prompt_set_result(pr, u);
-                        session_write_terminal(sess, pr->prompt);
-                        session_write_terminal(sess, u);
-                        session_write_terminal(sess, "\r\n");
-                    } else {
-                        all_filled = false;
-                    }
+    /* If user already submitted credentials via the modal during this sequence (e.g. username prompted first, then password) */
+    if (sess->temp_prompt_pass[0] != '\0') {
+        bool all_filled = true;
+        for (size_t i = 0; i < p->n_prompts; i++) {
+            prompt_t *pr = p->prompts[i];
+            if (!pr->echo) {
+                prompt_set_result(pr, sess->temp_prompt_pass);
+            } else {
+                const char *u = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
+                if (u && *u) {
+                    prompt_set_result(pr, u);
                 } else {
-                    /* Password prompt */
-                    if (saved_pass[0] != '\0') {
-                        prompt_set_result(pr, saved_pass);
-                        session_write_terminal(sess, pr->prompt);
-                        session_write_terminal(sess, "\x1b[1;33m[使用已加密保存的密码]\x1b[0m\r\n");
-                    } else {
-                        all_filled = false;
-                    }
+                    all_filled = false;
                 }
             }
-
-            smemclr(saved_pass, sizeof(saved_pass));
-
-            if (all_filled) {
-                p->spr = SPR_OK;
-                return SPR_OK;
-            }
+        }
+        if (all_filled) {
+            sess->prompt_attempts++;
+            p->spr = SPR_OK;
+            return SPR_OK;
         }
     }
 
-    /* 3. Interactive prompt in terminal */
+    /* 2. Try loading credentials from pw/ directory */
+    char saved_user[128] = {0};
+    char saved_pass[256] = {0};
+    bool saved_remember = false;
+    bool saved_autologin = false;
+    bool has_saved = false;
+
+    if (host && *host) {
+        has_saved = pw_load_credential(host, port, saved_user, sizeof(saved_user),
+                                       saved_pass, sizeof(saved_pass),
+                                       &saved_remember, &saved_autologin);
+    }
+
+    /* 3. If autoLogin is enabled, credentials exist, and we haven't failed login */
+    if (has_saved && saved_autologin && !sess->tried_saved_pw && !sess->login_failed && saved_pass[0] != '\0') {
+        sess->tried_saved_pw = true;
+        sess->prompt_attempts++;
+        bool all_filled = true;
+
+        for (size_t i = 0; i < p->n_prompts; i++) {
+            prompt_t *pr = p->prompts[i];
+            if (pr->echo) {
+                const char *u = (saved_user[0] != '\0') ? saved_user : conf_get_str(sess->cfg, CONF_username);
+                if (u && *u) {
+                    prompt_set_result(pr, u);
+                    session_write_terminal(sess, pr->prompt);
+                    session_write_terminal(sess, u);
+                    session_write_terminal(sess, "\r\n");
+                } else {
+                    all_filled = false;
+                }
+            } else {
+                prompt_set_result(pr, saved_pass);
+                session_write_terminal(sess, pr->prompt);
+                session_write_terminal(sess, "\x1b[1;33m[使用已加密保存的凭据自动免密登录...]\x1b[0m\r\n");
+            }
+        }
+
+        smemclr(saved_pass, sizeof(saved_pass));
+
+        if (all_filled) {
+            p->spr = SPR_OK;
+            return SPR_OK;
+        }
+    }
+
+    /* 4. Pop up WebKit SSH Auth modal dialog */
+    if (sess->hwnd) {
+        sess->cur_prompts = p;
+
+        const char *u = (saved_user[0] != '\0') ? saved_user :
+                        ((sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user :
+                         conf_get_str(sess->cfg, CONF_username));
+        if (!u) u = "";
+
+        const char *pref_pass = (has_saved && saved_remember && !sess->login_failed) ? saved_pass : "";
+        const char *err_msg = sess->login_failed ? "用户名或密码错误，请重新输入" : "";
+
+        char esc_host[256], esc_user[256], esc_pass[512], esc_err[256];
+        json_escape_string(host ? host : "", esc_host, sizeof(esc_host));
+        json_escape_string(u, esc_user, sizeof(esc_user));
+        json_escape_string(pref_pass, esc_pass, sizeof(esc_pass));
+        json_escape_string(err_msg, esc_err, sizeof(esc_err));
+
+        char json_buf[1536];
+        snprintf(json_buf, sizeof(json_buf),
+                 "P%d:{\"host\":\"%s\",\"port\":%d,\"user\":\"%s\",\"pass\":\"%s\",\"remember\":%s,\"autoLogin\":%s,\"error\":\"%s\"}",
+                 sess->id,
+                 esc_host,
+                 port > 0 ? port : 22,
+                 esc_user,
+                 esc_pass,
+                 (has_saved ? (saved_remember ? "true" : "false") : "true"),
+                 (has_saved ? (saved_autologin ? "true" : "false") : "false"),
+                 esc_err);
+
+        smemclr(saved_pass, sizeof(saved_pass));
+        smemclr(esc_pass, sizeof(esc_pass));
+
+        webview_host_send_to_window(sess->hwnd, json_buf);
+        return SPR_INCOMPLETE;
+    }
+
+    /* Fallback to terminal prompt if hwnd not available */
     sess->cur_prompts = p;
     sess->cur_prompt_idx = 0;
     if (!sess->prompt_input_buf) {
@@ -1449,19 +1672,30 @@ static void webkit_seat_notify_session_started(Seat *seat)
     WebKitSession *sess = session_from_seat(seat);
     if (!sess) return;
     sess->is_connected = true;
+    sess->login_failed = false;
+    sess->prompt_attempts = 0;
 
-    /* If user entered password during interactive prompt, save it encrypted into pw/ */
-    if (sess->temp_prompt_pass[0] != '\0') {
+    /* If user entered password via modal and modal_remember is set, save to pw/ */
+    if (sess->modal_remember && sess->temp_prompt_pass[0] != '\0') {
         const char *host = conf_get_str(sess->cfg, CONF_host);
         int port = conf_get_int(sess->cfg, CONF_port);
         const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
 
-        if (pw_save_credential(host, port, user, sess->temp_prompt_pass)) {
-            session_write_terminal(sess, "\x1b[1;32m[已加密保存凭据至 pw/ 目录，下次将自动免密登录]\x1b[0m\r\n");
+        if (pw_save_credential(host, port, user, sess->temp_prompt_pass, true, sess->modal_autologin)) {
+            if (sess->modal_autologin) {
+                session_write_terminal(sess, "\x1b[1;32m[已加密保存凭据至 pw/ 目录，下次将自动免密登录]\x1b[0m\r\n");
+            } else {
+                session_write_terminal(sess, "\x1b[1;32m[已加密保存凭据至 pw/ 目录]\x1b[0m\r\n");
+            }
         }
-        smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
-        sess->temp_prompt_pass[0] = '\0';
+    } else if (!sess->modal_remember && sess->temp_prompt_pass[0] != '\0') {
+        const char *host = conf_get_str(sess->cfg, CONF_host);
+        int port = conf_get_int(sess->cfg, CONF_port);
+        pw_delete_credential(host, port);
     }
+
+    smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
+    sess->temp_prompt_pass[0] = '\0';
 
     if (sess->auto_reconnect) {
         session_write_terminal(sess, "\x1b[1;32m[自动重连成功]\x1b[0m\r\n");
@@ -2188,6 +2422,55 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
     } else if (type == '4') {
         /* Auto-copy selected text to native clipboard */
         copy_to_clipboard_utf8(hwnd, payload, strlen(payload));
+    } else if (type == 'P') {
+        /* WebKit SSH Auth response: P{sess_id}:{json} or P{sess_id}:cancel */
+        const char *colon = strchr(payload, ':');
+        if (colon) {
+            int sess_id = atoi(payload);
+            const char *action = colon + 1;
+            WebKitSession *sess = session_find(sess_id);
+            if (sess && sess->cur_prompts) {
+                prompts_t *p = sess->cur_prompts;
+                if (!strcmp(action, "cancel")) {
+                    sess->cur_prompts = NULL;
+                    p->spr = SPR_USER_ABORT;
+                    if (p->callback) {
+                        queue_toplevel_callback(p->callback, p->callback_ctx);
+                    }
+                    session_write_terminal(sess, "\r\n\x1b[1;31m[用户取消了身份验证]\x1b[0m\r\n");
+                } else if (action[0] == '{') {
+                    char user[128] = {0};
+                    char pass[256] = {0};
+                    bool remember = false;
+                    bool autologin = false;
+                    parse_auth_json(action, user, sizeof(user), pass, sizeof(pass), &remember, &autologin);
+
+                    strncpy(sess->temp_prompt_user, user, sizeof(sess->temp_prompt_user) - 1);
+                    sess->temp_prompt_user[sizeof(sess->temp_prompt_user) - 1] = '\0';
+                    strncpy(sess->temp_prompt_pass, pass, sizeof(sess->temp_prompt_pass) - 1);
+                    sess->temp_prompt_pass[sizeof(sess->temp_prompt_pass) - 1] = '\0';
+                    sess->modal_remember = remember;
+                    sess->modal_autologin = autologin;
+                    sess->prompt_attempts++;
+
+                    for (size_t i = 0; i < p->n_prompts; i++) {
+                        prompt_t *pr = p->prompts[i];
+                        if (pr->echo) {
+                            const char *u = (user[0] != '\0') ? user : conf_get_str(sess->cfg, CONF_username);
+                            prompt_set_result(pr, u ? u : "");
+                        } else {
+                            prompt_set_result(pr, pass);
+                        }
+                    }
+
+                    sess->cur_prompts = NULL;
+                    p->spr = SPR_OK;
+                    if (p->callback) {
+                        queue_toplevel_callback(p->callback, p->callback_ctx);
+                    }
+                }
+            }
+        }
     }
 }
 
