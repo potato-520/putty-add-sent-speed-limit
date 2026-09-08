@@ -811,12 +811,10 @@ static void session_toggle_auto_reconnect(WebKitSession *sess)
 
     if (sess->auto_reconnect) {
         session_write_terminal(sess, "\r\n\x1b[1;32m[自动重连已开启]\x1b[0m\r\n");
-        if ((!sess->backend || !backend_connected(sess->backend)) && !sess->reconnect_timer_active) {
         if (!session_is_connected(sess) && !sess->reconnect_timer_active) {
             session_schedule_reconnect(sess);
         }
     } else {
-        session_write_terminal(sess, "\r\n\x1b[33m[自动重连已关闭]\x1b[0m\r\n");
         if (sess->reconnect_timer_active) {
             expire_timer_context(&sess->reconnect_timer_active);
             sess->reconnect_timer_active = false;
@@ -1396,7 +1394,6 @@ static void session_attach_to_window(HWND target_hwnd, int sess_id)
     snprintf(tab_msg, sizeof(tab_msg), "T%d:%s", sess->id, sess->name);
     webview_host_send_to_window(target_hwnd, tab_msg);
     webview_host_send_session_text_to_window(target_hwnd, '2', sess->id,
-        (sess->backend && backend_connected(sess->backend)) ? "connected" : "disconnected");
         session_is_connected(sess) ? "connected" : "disconnected");
 
     char log_msg[MAX_PATH + 32];
@@ -1542,7 +1539,6 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                 snprintf(tab_msg, sizeof(tab_msg), "T%d:%s", s->id, s->name);
                 webview_host_send_to_window(hwnd, tab_msg);
                 webview_host_send_session_text_to_window(hwnd, '2', s->id,
-                    (s->backend && backend_connected(s->backend)) ? "connected" : "disconnected");
                     session_is_connected(s) ? "connected" : "disconnected");
                 char log_msg[MAX_PATH + 32];
                 if (s->log_enabled) {

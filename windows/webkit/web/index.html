@@ -398,6 +398,176 @@
     .xterm .xterm-rows .xterm-cursor.xterm-cursor-underline:not(.xterm-cursor-blink) {
       border-bottom: 2px solid var(--term-cursor, #ffffff) !important;
     }
+
+    /* Multi-line Text Editor Modal */
+    .mle-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.58);
+      backdrop-filter: blur(2.5px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: mleFadeIn 0.15s ease-out;
+    }
+    @keyframes mleFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .mle-dialog {
+      background: #252526;
+      border: 1px solid #454545;
+      border-radius: 6px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+      width: 720px;
+      max-width: 92vw;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: mleSlideIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes mleSlideIn {
+      from { transform: scale(0.96) translateY(-12px); opacity: 0; }
+      to { transform: scale(1) translateY(0); opacity: 1; }
+    }
+    .mle-header {
+      padding: 10px 14px;
+      background: #2d2d2d;
+      border-bottom: 1px solid #3c3c3c;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    .mle-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+    }
+    .mle-btn-icon {
+      background: none;
+      border: none;
+      color: #aaa;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 3px 8px;
+      border-radius: 3px;
+      line-height: 1;
+      transition: background 0.1s, color 0.1s;
+    }
+    .mle-btn-icon:hover {
+      background: #3c3c3c;
+      color: #fff;
+    }
+    .mle-body {
+      padding: 12px 14px 8px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .mle-tip {
+      font-size: 11.5px;
+      color: #9cdcfe;
+      background: rgba(156, 220, 254, 0.08);
+      padding: 7px 10px;
+      border-radius: 4px;
+      border-left: 3px solid #007acc;
+      line-height: 1.45;
+      user-select: none;
+    }
+    .mle-tip kbd {
+      background: #333;
+      border: 1px solid #555;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: inherit;
+      font-size: 10.5px;
+      color: #fff;
+    }
+    #mle-textarea {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: 'Cascadia Code', Consolas, 'Segoe UI', monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      border: 1px solid #3c3c3c;
+      border-radius: 4px;
+      padding: 10px;
+      height: 250px;
+      min-height: 160px;
+      max-height: 60vh;
+      resize: vertical;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+      tab-size: 4;
+    }
+    #mle-textarea:focus {
+      border-color: #007acc;
+      box-shadow: 0 0 0 1px #007acc;
+    }
+    .mle-footer {
+      padding: 10px 14px;
+      background: #2d2d2d;
+      border-top: 1px solid #3c3c3c;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    .mle-status {
+      font-size: 11px;
+      color: #888;
+      font-family: 'Cascadia Code', Consolas, monospace;
+    }
+    .mle-options {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      color: #bbb;
+      cursor: pointer;
+    }
+    .mle-options input {
+      cursor: pointer;
+    }
+    .mle-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .mle-btn {
+      border: none;
+      border-radius: 4px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      transition: background 0.15s;
+    }
+    .mle-btn-secondary {
+      background: #3c3c3c;
+      color: #cccccc;
+    }
+    .mle-btn-secondary:hover {
+      background: #4a4a4a;
+      color: #ffffff;
+    }
+    .mle-btn-primary {
+      background: #0e639c;
+      color: #ffffff;
+    }
+    .mle-btn-primary:hover {
+      background: #1177bb;
+    }
   </style>
 </head>
 <body>
@@ -411,6 +581,9 @@
   <div id="tab-context-menu" class="context-menu" style="display: none;">
     <div class="menu-item" data-action="toggle-log">
       <span id="ctx-log-icon">▶</span> <span id="ctx-log-text">录制会话日志 (Record Log)</span>
+    </div>
+    <div class="menu-item" data-action="open-mle">
+      <span>📝</span> 多行文本编辑器 (Ctrl+单击终端)
     </div>
     <div class="menu-divider"></div>
     <div class="menu-item" data-action="clone">
@@ -444,6 +617,14 @@
 
   <!-- Custom Dropdown Menu for Toolbox -->
   <div id="toolbox-menu" class="context-menu" style="display: none; min-width: 250px;">
+    <div class="menu-item" data-action="open-mle">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+      </svg>
+      <span>多行文本编辑器 (Ctrl+单击终端)</span>
+    </div>
+    <div class="menu-divider"></div>
     <div class="menu-item" data-action="strip-log-ansi">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
         <path d="M21 4H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"></path>
@@ -452,6 +633,49 @@
         <line x1="7" y1="16" x2="10" y2="16"></line>
       </svg>
       <span>SSH Log 颜色编码去除 (Strip ANSI)</span>
+    </div>
+  </div>
+
+  <!-- Multi-line Text Editor Modal (Triggered by Ctrl + Left Click on Terminal) -->
+  <div id="mle-modal" class="mle-backdrop" style="display: none;">
+    <div class="mle-dialog">
+      <div class="mle-header">
+        <div class="mle-title">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+          <span id="mle-title-text">多行文本编辑器 (Multi-line Editor)</span>
+        </div>
+        <button id="mle-close-btn" class="mle-btn-icon" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="mle-body">
+        <div class="mle-tip">
+          💡 <b>提示</b>：按 <kbd>Enter</kbd> 正常换行<b>不会发送到终端</b>。编辑完成后，点击【发送 / 粘贴】或按 <kbd>Ctrl+Enter</kbd>，将以<b>粘贴</b>效果填入终端（不自动回车执行）。
+        </div>
+        <textarea id="mle-textarea" placeholder="在此输入或编辑多行文本、脚本或命令...&#10;按 Enter 正常换行，绝不会提前发送到终端&#10;编辑完毕后点击下方【发送 / 粘贴】或按 Ctrl+Enter，如同右键粘贴一样安全填入终端" spellcheck="false"></textarea>
+      </div>
+      <div class="mle-footer">
+        <div class="mle-status" id="mle-status">0 行, 0 字符</div>
+        <div class="mle-actions">
+          <button id="mle-clear-btn" class="mle-btn mle-btn-secondary" title="清空输入框内容">清空</button>
+          <button id="mle-copy-btn" class="mle-btn mle-btn-secondary" title="复制内容到系统剪贴板">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px;">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            复制
+          </button>
+          <button id="mle-cancel-btn" class="mle-btn mle-btn-secondary">取消 (Esc)</button>
+          <button id="mle-send-btn" class="mle-btn mle-btn-primary" title="像粘贴一样将内容填入终端，不自动触发回车">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+            发送 / 粘贴 (Ctrl+Enter)
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1242,8 +1466,14 @@
 
       term.open(viewEl);
 
-      // Ensure terminal gets focused on click; suppress right-click propagation to prevent duplicate pastes
+      // Ensure terminal gets focused on click; Ctrl+Click opens Multi-line Editor
       viewEl.addEventListener('mousedown', e => {
+        if (e.ctrlKey && e.button === 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          openMultiLineEditor(id);
+          return;
+        }
         term.focus();
         if (e.button === 2) {
           // When applications enable VT mouse tracking (e.g. Copilot CLI, vim, htop),
@@ -1251,6 +1481,13 @@
           // On Windows, ConPTY interprets that SGR right-click as a QuickEdit paste,
           // while our contextmenu handler ALSO pastes from the clipboard, resulting in
           // a duplicate paste. Stopping propagation here prevents xterm.js from reporting it.
+          e.stopPropagation();
+        }
+      }, true);
+
+      viewEl.addEventListener('click', e => {
+        if (e.ctrlKey && e.button === 0) {
+          e.preventDefault();
           e.stopPropagation();
         }
       }, true);
@@ -1579,6 +1816,13 @@
         hideToolboxMenu();
         if (action === 'strip-log-ansi') {
           sendToHost('3', 'strip_log_ansi');
+        } else if (action === 'open-mle') {
+          if (dockManager.activeGroupId && dockManager.groups[dockManager.activeGroupId]) {
+            const sid = dockManager.groups[dockManager.activeGroupId].activeSessionId;
+            if (sid) openMultiLineEditor(sid);
+          } else if (activeGlobalSessionId) {
+            openMultiLineEditor(activeGlobalSessionId);
+          }
         }
       });
     }
@@ -1593,6 +1837,8 @@
 
       if (action === 'toggle-log') {
         sendToHost('3', `${targetId}:toggle_log`);
+      } else if (action === 'open-mle') {
+        openMultiLineEditor(targetId);
       } else if (action === 'clone') {
         sendToHost('3', `${targetId}:clone`);
       } else if (action === 'split-right') {
@@ -1743,14 +1989,146 @@
         }
       });
 
-      // Window/Document focus routing: ensure active terminal is focused
+      // Multi-line Text Editor Logic
+      let mleActiveSessionId = null;
+      const mleModalEl = document.getElementById('mle-modal');
+      const mleTextareaEl = document.getElementById('mle-textarea');
+      const mleTitleTextEl = document.getElementById('mle-title-text');
+      const mleStatusEl = document.getElementById('mle-status');
+      const mleCopyBtn = document.getElementById('mle-copy-btn');
+      const mleCloseBtn = document.getElementById('mle-close-btn');
+      const mleCancelBtn = document.getElementById('mle-cancel-btn');
+      const mleClearBtn = document.getElementById('mle-clear-btn');
+      const mleSendBtn = document.getElementById('mle-send-btn');
+
+      function updateMleStatus() {
+        if (!mleTextareaEl) return;
+        const val = mleTextareaEl.value;
+        const lines = val.length > 0 ? val.split('\n').length : 0;
+        const chars = val.length;
+        if (mleStatusEl) {
+          mleStatusEl.textContent = `${lines} 行, ${chars} 字符`;
+        }
+      }
+
+      function openMultiLineEditor(sessionId) {
+        const s = sessions[sessionId];
+        if (!s) return;
+        mleActiveSessionId = sessionId;
+        const sessionTitle = s.baseTitle || s.title || `Session ${sessionId}`;
+        if (mleTitleTextEl) {
+          mleTitleTextEl.textContent = `多行文本编辑器 - [${sessionTitle}]`;
+        }
+        if (mleModalEl) {
+          mleModalEl.style.display = 'flex';
+        }
+        updateMleStatus();
+        setTimeout(() => {
+          if (mleTextareaEl) {
+            mleTextareaEl.focus();
+          }
+        }, 30);
+      }
+
+      function closeMultiLineEditor() {
+        if (mleModalEl) {
+          mleModalEl.style.display = 'none';
+        }
+        if (mleActiveSessionId && sessions[mleActiveSessionId]) {
+          sessions[mleActiveSessionId].term.focus();
+        }
+        mleActiveSessionId = null;
+      }
+
+      function sendMultiLineText() {
+        if (!mleActiveSessionId || !sessions[mleActiveSessionId]) {
+          closeMultiLineEditor();
+          return;
+        }
+        const s = sessions[mleActiveSessionId];
+        const rawText = mleTextareaEl ? mleTextareaEl.value : '';
+        if (mleTextareaEl) {
+          mleTextareaEl.value = '';
+        }
+        closeMultiLineEditor();
+
+        if (rawText && rawText.length > 0 && s && s.term) {
+          // Terminal paste effect: respects bracketed paste mode, converts \n to \r,
+          // and does not force an unwanted Enter execution.
+          s.term.paste(rawText);
+        }
+      }
+
+      if (mleTextareaEl) {
+        mleTextareaEl.addEventListener('input', updateMleStatus);
+
+        mleTextareaEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && e.ctrlKey) {
+            e.preventDefault();
+            sendMultiLineText();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMultiLineEditor();
+          } else if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = mleTextareaEl.selectionStart;
+            const end = mleTextareaEl.selectionEnd;
+            mleTextareaEl.value = mleTextareaEl.value.substring(0, start) + '    ' + mleTextareaEl.value.substring(end);
+            mleTextareaEl.selectionStart = mleTextareaEl.selectionEnd = start + 4;
+            updateMleStatus();
+          }
+        });
+      }
+
+      if (mleCloseBtn) mleCloseBtn.addEventListener('click', closeMultiLineEditor);
+      if (mleCancelBtn) mleCancelBtn.addEventListener('click', closeMultiLineEditor);
+      if (mleClearBtn) {
+        mleClearBtn.addEventListener('click', () => {
+          if (mleTextareaEl) {
+            mleTextareaEl.value = '';
+            mleTextareaEl.focus();
+            updateMleStatus();
+          }
+        });
+      }
+      if (mleCopyBtn) {
+        mleCopyBtn.addEventListener('click', () => {
+          if (!mleTextareaEl) return;
+          const val = mleTextareaEl.value;
+          if (val) {
+            sendToHost('4', val);
+            const origHtml = mleCopyBtn.innerHTML;
+            mleCopyBtn.textContent = '已复制!';
+            setTimeout(() => {
+              mleCopyBtn.innerHTML = origHtml;
+            }, 1200);
+          }
+        });
+      }
+      if (mleSendBtn) mleSendBtn.addEventListener('click', sendMultiLineText);
+
+      if (mleModalEl) {
+        mleModalEl.addEventListener('mousedown', (e) => {
+          if (e.target === mleModalEl) {
+            closeMultiLineEditor();
+          }
+        });
+      }
+
+      // Window/Document focus routing: ensure active terminal is focused (guarded by modal)
       window.addEventListener('focus', () => {
+        if (mleModalEl && mleModalEl.style.display !== 'none') {
+          return;
+        }
         if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {
           sessions[activeGlobalSessionId].term.focus();
         }
       });
 
       document.addEventListener('keydown', (e) => {
+        if (mleModalEl && mleModalEl.style.display !== 'none') {
+          return;
+        }
         if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {
           const active = document.activeElement;
           if (!active || active === document.body || active.tagName === 'BUTTON') {
