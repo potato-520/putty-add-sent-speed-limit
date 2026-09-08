@@ -18,6 +18,8 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <aclapi.h>
+#include <sddl.h>
 #include "webkit/webview_host.h"
 
 /* appname is generated in be_list.c by be_list() macro */
@@ -685,6 +687,199 @@ static void strip_log_ansi_via_dialog(HWND hwnd)
         wchar_t param[MAX_PATH + 16];
         _snwprintf(param, sizeof(param) / sizeof(param[0]), L"/select,\"%s\"", outPath);
         ShellExecuteW(hwnd, L"open", L"explorer.exe", param, NULL, SW_SHOWNORMAL);
+    }
+}
+
+static void fix_ssh_key_perm_via_dialog(HWND hwnd)
+{
+    wchar_t szFile[MAX_PATH] = {0};
+    wchar_t initial_dir[MAX_PATH] = {0};
+
+    /* Check default user .ssh directory */
+    wchar_t user_profile[MAX_PATH];
+    if (GetEnvironmentVariableW(L"USERPROFILE", user_profile, MAX_PATH) > 0) {
+        _snwprintf(initial_dir, MAX_PATH, L"%s\\.ssh", user_profile);
+        DWORD attr = GetFileAttributesW(initial_dir);
+        if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            wcsncpy(initial_dir, user_profile, MAX_PATH - 1);
+            initial_dir[MAX_PATH - 1] = L'\0';
+        }
+    }
+
+    OPENFILENAMEW ofn;
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
+    ofn.lpstrFilter =
+        L"SSH 私钥文件 (*; *.pem; *.key; id_*)\0*;*.pem;*.key;id_*\0"
+        L"所有文件 (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrInitialDir = initial_dir[0] ? initial_dir : NULL;
+    ofn.lpstrTitle = L"选择需要修复权限的 SSH 私钥文件 (Select SSH Private Key File)";
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+
+    if (!GetOpenFileNameW(&ofn)) {
+        return; /* User cancelled */
+    }
+
+    /* 1. Retrieve current user SID and SYSTEM SID */
+    HANDLE hToken = NULL;
+    PTOKEN_USER pTokenUser = NULL;
+    PSID pSystemSid = NULL;
+    SID_IDENTIFIER_AUTHORITY nt_auth = SECURITY_NT_AUTHORITY;
+
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        DWORD dwSize = 0;
+        GetTokenInformation(hToken, TokenUser, NULL, 0, &dwSize);
+        if (dwSize > 0) {
+            pTokenUser = (PTOKEN_USER)smalloc(dwSize);
+            if (!GetTokenInformation(hToken, TokenUser, pTokenUser, dwSize, &dwSize)) {
+                sfree(pTokenUser);
+                pTokenUser = NULL;
+            }
+        }
+        CloseHandle(hToken);
+    }
+
+    AllocateAndInitializeSid(&nt_auth, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &pSystemSid);
+
+    PACL pNewDacl = NULL;
+    DWORD res = ERROR_SUCCESS;
+
+    if (pTokenUser && pSystemSid) {
+        EXPLICIT_ACCESS_W ea[2];
+        ZeroMemory(ea, sizeof(ea));
+
+        /* Entry 0: Current User - Full Control */
+        ea[0].grfAccessPermissions = GENERIC_ALL;
+        ea[0].grfAccessMode = SET_ACCESS;
+        ea[0].grfInheritance = NO_INHERITANCE;
+        ea[0].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        ea[0].Trustee.TrusteeType = TRUSTEE_IS_USER;
+        ea[0].Trustee.ptstrName = (LPWSTR)pTokenUser->User.Sid;
+
+        /* Entry 1: SYSTEM - Full Control */
+        ea[1].grfAccessPermissions = GENERIC_ALL;
+        ea[1].grfAccessMode = SET_ACCESS;
+        ea[1].grfInheritance = NO_INHERITANCE;
+        ea[1].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        ea[1].Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+        ea[1].Trustee.ptstrName = (LPWSTR)pSystemSid;
+
+        res = SetEntriesInAclW(2, ea, NULL, &pNewDacl);
+        if (res == ERROR_SUCCESS && pNewDacl) {
+            /* Try setting Owner and DACL with inheritance protection */
+            res = SetNamedSecurityInfoW(
+                szFile,
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                pTokenUser->User.Sid,
+                NULL,
+                pNewDacl,
+                NULL
+            );
+
+            /* If setting owner fails, try setting only DACL with inheritance protection */
+            if (res != ERROR_SUCCESS) {
+                res = SetNamedSecurityInfoW(
+                    szFile,
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    NULL,
+                    NULL,
+                    pNewDacl,
+                    NULL
+                );
+            }
+        }
+    } else {
+        res = ERROR_ACCESS_DENIED;
+    }
+
+    if (pNewDacl) LocalFree(pNewDacl);
+    if (pSystemSid) FreeSid(pSystemSid);
+    if (pTokenUser) sfree(pTokenUser);
+
+    /* 2. If access denied, offer UAC elevation fallback */
+    if (res == ERROR_ACCESS_DENIED) {
+        int ask_uac = MessageBoxW(
+            hwnd,
+            L"当前普通用户权限无法直接修改该文件的安全属性（可能所有者为管理员或其他用户）。\n\n"
+            L"是否以系统管理员身份 (UAC) 进行一键修复？",
+            L"需要管理员权限 (Administrator Required)",
+            MB_YESNO | MB_ICONQUESTION
+        );
+
+        if (ask_uac == IDYES) {
+            wchar_t username[256];
+            DWORD ulen = sizeof(username) / sizeof(username[0]);
+            if (!GetUserNameW(username, &ulen)) {
+                wcsncpy(username, L"%USERNAME%", 255);
+            }
+
+            wchar_t cmd_args[1024];
+            _snwprintf(cmd_args, sizeof(cmd_args) / sizeof(cmd_args[0]),
+                L"/c \"takeown /F \"%s\" && icacls \"%s\" /reset && icacls \"%s\" /inheritance:r && icacls \"%s\" /grant:r \"%s\":(R,W) && icacls \"%s\" /grant:r \"SYSTEM\":(R,W)\"",
+                szFile, szFile, szFile, szFile, username, szFile);
+
+            SHELLEXECUTEINFOW sei;
+            ZeroMemory(&sei, sizeof(sei));
+            sei.cbSize = sizeof(sei);
+            sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+            sei.hwnd = hwnd;
+            sei.lpVerb = L"runas"; /* Request UAC elevation */
+            sei.lpFile = L"cmd.exe";
+            sei.lpParameters = cmd_args;
+            sei.nShow = SW_HIDE;
+
+            if (ShellExecuteExW(&sei)) {
+                if (sei.hProcess) {
+                    WaitForSingleObject(sei.hProcess, 10000);
+                    DWORD exit_code = 0;
+                    GetExitCodeProcess(sei.hProcess, &exit_code);
+                    CloseHandle(sei.hProcess);
+                    if (exit_code == 0) {
+                        res = ERROR_SUCCESS;
+                    } else {
+                        res = exit_code;
+                    }
+                }
+            } else {
+                /* User cancelled UAC prompt */
+                return;
+            }
+        }
+    }
+
+    /* 3. Feedback Dialog */
+    if (res == ERROR_SUCCESS) {
+        wchar_t msg[1024];
+        _snwprintf(msg, sizeof(msg) / sizeof(msg[0]),
+            L"✅ SSH 私钥文件权限已成功修复！\n\n"
+            L"目标文件：\n%s\n\n"
+            L"已配置的安全策略（等同于 Linux chmod 600）：\n"
+            L"• 禁用并移除所有继承权限 (Inheritance Removed)\n"
+            L"• 移除 Users / Everyone 等外部未授权访问组\n"
+            L"• 仅保留当前登录用户与 SYSTEM 专属读写权限\n\n"
+            L"现在该私钥已可直接在 VS Code Remote-SSH、Git 以及 Windows 原生 OpenSSH 中安全使用，不会再有权限过大拦截报错。\n\n"
+            L"是否在文件资源管理器中定位并高亮显示此文件？",
+            szFile);
+
+        if (MessageBoxW(hwnd, msg, L"SSH 私钥权限修复完成", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+            wchar_t param[MAX_PATH + 16];
+            _snwprintf(param, sizeof(param) / sizeof(param[0]), L"/select,\"%s\"", szFile);
+            ShellExecuteW(hwnd, L"open", L"explorer.exe", param, NULL, SW_SHOWNORMAL);
+        }
+    } else {
+        wchar_t err_msg[512];
+        _snwprintf(err_msg, sizeof(err_msg) / sizeof(err_msg[0]),
+            L"❌ 修复私钥权限失败！\n\n"
+            L"目标文件：%s\n"
+            L"系统错误代码：%lu",
+            szFile, res);
+        MessageBoxW(hwnd, err_msg, L"修复失败", MB_OK | MB_ICONERROR);
     }
 }
 
@@ -1586,6 +1781,8 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             session_new_via_dialog(hwnd);
         } else if (!strcmp(payload, "strip_log_ansi")) {
             strip_log_ansi_via_dialog(hwnd);
+        } else if (!strcmp(payload, "fix_ssh_key_perm")) {
+            fix_ssh_key_perm_via_dialog(hwnd);
         } else if (strstr(payload, ":toggle_log")) {
             int sess_id = atoi(payload);
             WebKitSession *sess = session_find(sess_id);

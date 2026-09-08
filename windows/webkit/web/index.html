@@ -634,6 +634,13 @@
       </svg>
       <span>SSH Log 颜色编码去除 (Strip ANSI)</span>
     </div>
+    <div class="menu-item" data-action="fix-ssh-key-perm">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+      </svg>
+      <span>SSH 私钥权限一键修复 (Windows 600)</span>
+    </div>
   </div>
 
   <!-- Multi-line Text Editor Modal (Triggered by Ctrl + Left Click on Terminal) -->
@@ -1816,6 +1823,8 @@
         hideToolboxMenu();
         if (action === 'strip-log-ansi') {
           sendToHost('3', 'strip_log_ansi');
+        } else if (action === 'fix-ssh-key-perm') {
+          sendToHost('3', 'fix_ssh_key_perm');
         } else if (action === 'open-mle') {
           if (dockManager.activeGroupId && dockManager.groups[dockManager.activeGroupId]) {
             const sid = dockManager.groups[dockManager.activeGroupId].activeSessionId;
