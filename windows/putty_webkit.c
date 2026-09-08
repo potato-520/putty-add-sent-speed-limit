@@ -1689,7 +1689,7 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
             if (!pr->echo) {
                 prompt_set_result(pr, sess->temp_prompt_pass);
             } else {
-                const char *u = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
+                const char *u = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
                 if (u && *u) {
                     prompt_set_result(pr, u);
                     if (!sess->username_displayed) {
@@ -1719,7 +1719,7 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
         strbuf *json_users = strbuf_new_nm();
         pw_load_all_for_host(host, port, last_user, sizeof(last_user), json_users);
 
-        const char *cfg_user = conf_get_str(sess->cfg, CONF_username);
+        const char *cfg_user = conf_get_str_ambi(sess->cfg, CONF_username, NULL);
         const char *cur_u = (last_user[0] != '\0') ? last_user :
                             ((cfg_user && *cfg_user) ? cfg_user : sess->temp_prompt_user);
 
@@ -1787,7 +1787,7 @@ static void webkit_seat_notify_session_started(Seat *seat)
     if (sess->modal_remember && sess->temp_prompt_pass[0] != '\0') {
         const char *host = conf_get_str(sess->cfg, CONF_host);
         int port = conf_get_int(sess->cfg, CONF_port);
-        const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
+        const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
 
         if (pw_save_credential(host, port, user, sess->temp_prompt_pass, true, sess->modal_autologin)) {
             if (sess->modal_autologin) {
@@ -1799,7 +1799,7 @@ static void webkit_seat_notify_session_started(Seat *seat)
     } else if (!sess->modal_remember && sess->temp_prompt_pass[0] != '\0') {
         const char *host = conf_get_str(sess->cfg, CONF_host);
         int port = conf_get_int(sess->cfg, CONF_port);
-        const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
+        const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
         pw_delete_credential(host, port, user);
     }
 
@@ -2565,7 +2565,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                     for (size_t i = 0; i < p->n_prompts; i++) {
                         prompt_t *pr = p->prompts[i];
                         if (pr->echo) {
-                            const char *u = (user[0] != '\0') ? user : conf_get_str(sess->cfg, CONF_username);
+                            const char *u = (user[0] != '\0') ? user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
                             prompt_set_result(pr, u ? u : "");
                             if (!sess->username_displayed && u && *u) {
                                 session_write_terminal(sess, "login as: ");
