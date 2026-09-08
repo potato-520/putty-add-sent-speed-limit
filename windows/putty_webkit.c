@@ -20,6 +20,8 @@
 #include <shellapi.h>
 #include <aclapi.h>
 #include <sddl.h>
+#include <wincrypt.h>
+#pragma comment(lib, "crypt32.lib")
 #include "webkit/webview_host.h"
 
 /* appname is generated in be_list.c by be_list() macro */
@@ -206,6 +208,15 @@ typedef struct WebKitSession {
     int reconnect_countdown;
     unsigned long reconnect_next_tick;
     unsigned long reconnect_target_tick;
+
+    /* SSH Interactive prompt state & password vault context */
+    prompts_t *cur_prompts;
+    size_t cur_prompt_idx;
+    strbuf *prompt_input_buf;
+    char temp_prompt_user[128];
+    char temp_prompt_pass[256];
+    bool tried_saved_pw;
+
     struct WebKitSession *next;
 } WebKitSession;
 
@@ -846,11 +857,216 @@ static void fix_ssh_key_perm_via_dialog(HWND hwnd)
 static void session_reconnect(WebKitSession *sess);
 static void session_schedule_reconnect(WebKitSession *sess);
 
+/* ============================================================================
+ * Local Encrypted Credential Vault (pw/ directory)
+ * Uses Windows DPAPI (CryptProtectData / CryptUnprotectData) with app-specific entropy
+ * ============================================================================ */
+
+static const char PW_APP_ENTROPY[] = "PuTTY_WebKit_Vault_v1_Secret!#@9841&%_Key";
+
+static void pw_get_dir(wchar_t *out_dir, size_t max_len)
+{
+    wchar_t exe_path[MAX_PATH];
+    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    wchar_t *last_slash = wcsrchr(exe_path, L'\\');
+    if (last_slash) *last_slash = L'\0';
+    _snwprintf(out_dir, max_len, L"%s\\pw", exe_path);
+
+    bool ok = create_directory_recursive(out_dir);
+    if (!ok) {
+        wchar_t appdata[MAX_PATH];
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
+            _snwprintf(out_dir, max_len, L"%s\\PuTTY-WebKit\\pw", appdata);
+            create_directory_recursive(out_dir);
+        }
+    }
+}
+
+static void pw_get_filepath(wchar_t *out_path, size_t max_len, const char *host, int port)
+{
+    wchar_t pw_dir[MAX_PATH];
+    pw_get_dir(pw_dir, MAX_PATH);
+
+    /* Sanitize host for safe Windows filename */
+    char safe_host[128];
+    size_t j = 0;
+    for (size_t i = 0; host && host[i] && j + 1 < sizeof(safe_host); i++) {
+        char c = host[i];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+            c == '"' || c == '<' || c == '>' || c == '|' || (unsigned char)c < 0x20) {
+            safe_host[j++] = '_';
+        } else {
+            safe_host[j++] = c;
+        }
+    }
+    safe_host[j] = '\0';
+    if (safe_host[0] == '\0') {
+        strncpy(safe_host, "default", sizeof(safe_host) - 1);
+    }
+
+    wchar_t w_safe_host[128];
+    MultiByteToWideChar(CP_UTF8, 0, safe_host, -1, w_safe_host, 128);
+
+    _snwprintf(out_path, max_len, L"%s\\%s_%d.enc", pw_dir, w_safe_host, port > 0 ? port : 22);
+}
+
+static bool pw_save_credential(const char *host, int port, const char *user, const char *pass)
+{
+    if (!host || !*host || !pass || !*pass)
+        return false;
+
+    wchar_t filepath[MAX_PATH];
+    pw_get_filepath(filepath, MAX_PATH, host, port);
+
+    char plaintext[512];
+    int pt_len = snprintf(plaintext, sizeof(plaintext), "USER:%s\nPASS:%s\n",
+                          user ? user : "", pass);
+    if (pt_len <= 0 || (size_t)pt_len >= sizeof(plaintext))
+        return false;
+
+    DATA_BLOB data_in;
+    data_in.pbData = (BYTE *)plaintext;
+    data_in.cbData = (DWORD)pt_len;
+
+    DATA_BLOB entropy;
+    entropy.pbData = (BYTE *)PW_APP_ENTROPY;
+    entropy.cbData = (DWORD)strlen(PW_APP_ENTROPY);
+
+    DATA_BLOB data_out;
+    ZeroMemory(&data_out, sizeof(data_out));
+
+    BOOL res = CryptProtectData(&data_in, L"PuTTY-WebKit SSH Credential", &entropy,
+                                NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &data_out);
+    smemclr(plaintext, sizeof(plaintext));
+
+    if (!res || !data_out.pbData)
+        return false;
+
+    FILE *fp = _wfopen(filepath, L"wb");
+    if (!fp) {
+        LocalFree(data_out.pbData);
+        return false;
+    }
+
+    size_t written = fwrite(data_out.pbData, 1, data_out.cbData, fp);
+    fclose(fp);
+    LocalFree(data_out.pbData);
+
+    dbg_log("pw_save_credential: Saved %s:%d to %ls (%zu bytes)", host, port, filepath, written);
+    return written > 0;
+}
+
+static bool pw_load_credential(const char *host, int port,
+                               char *out_user, size_t user_size,
+                               char *out_pass, size_t pass_size)
+{
+    if (!host || !*host)
+        return false;
+
+    wchar_t filepath[MAX_PATH];
+    pw_get_filepath(filepath, MAX_PATH, host, port);
+
+    FILE *fp = _wfopen(filepath, L"rb");
+    if (!fp)
+        return false;
+
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (fsize <= 0 || fsize > 64 * 1024) {
+        fclose(fp);
+        return false;
+    }
+
+    BYTE *cipher_buf = (BYTE *)smalloc(fsize);
+    size_t read_bytes = fread(cipher_buf, 1, fsize, fp);
+    fclose(fp);
+
+    if (read_bytes != (size_t)fsize) {
+        sfree(cipher_buf);
+        return false;
+    }
+
+    DATA_BLOB data_in;
+    data_in.pbData = cipher_buf;
+    data_in.cbData = (DWORD)fsize;
+
+    DATA_BLOB entropy;
+    entropy.pbData = (BYTE *)PW_APP_ENTROPY;
+    entropy.cbData = (DWORD)strlen(PW_APP_ENTROPY);
+
+    DATA_BLOB data_out;
+    ZeroMemory(&data_out, sizeof(data_out));
+
+    BOOL res = CryptUnprotectData(&data_in, NULL, &entropy,
+                                  NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &data_out);
+    sfree(cipher_buf);
+
+    if (!res || !data_out.pbData) {
+        dbg_log("pw_load_credential: CryptUnprotectData failed for %s:%d", host, port);
+        return false;
+    }
+
+    char *pt = (char *)data_out.pbData;
+    size_t pt_len = (size_t)data_out.cbData;
+
+    bool found_user = false;
+    bool found_pass = false;
+
+    char *line = pt;
+    char *end = pt + pt_len;
+
+    while (line < end) {
+        char *eol = line;
+        while (eol < end && *eol != '\n' && *eol != '\r')
+            eol++;
+
+        size_t line_len = eol - line;
+        if (line_len >= 5 && !memcmp(line, "USER:", 5)) {
+            if (out_user && user_size > 0) {
+                size_t cpy_len = line_len - 5;
+                if (cpy_len >= user_size) cpy_len = user_size - 1;
+                memcpy(out_user, line + 5, cpy_len);
+                out_user[cpy_len] = '\0';
+                found_user = true;
+            }
+        } else if (line_len >= 5 && !memcmp(line, "PASS:", 5)) {
+            if (out_pass && pass_size > 0) {
+                size_t cpy_len = line_len - 5;
+                if (cpy_len >= pass_size) cpy_len = pass_size - 1;
+                memcpy(out_pass, line + 5, cpy_len);
+                out_pass[cpy_len] = '\0';
+                found_pass = true;
+            }
+        }
+
+        while (eol < end && (*eol == '\n' || *eol == '\r'))
+            eol++;
+        line = eol;
+    }
+
+    smemclr(data_out.pbData, data_out.cbData);
+    LocalFree(data_out.pbData);
+
+    return found_pass;
+}
+
 static void session_cleanup_backend(WebKitSession *sess)
 {
-    if (!sess || !sess->backend)
+    if (!sess)
         return;
-    if (sess->in_backend_free)
+
+    sess->cur_prompts = NULL;
+    if (sess->prompt_input_buf) {
+        strbuf_free(sess->prompt_input_buf);
+        sess->prompt_input_buf = NULL;
+    }
+    smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
+    sess->temp_prompt_pass[0] = '\0';
+    sess->temp_prompt_user[0] = '\0';
+
+    if (!sess->backend || sess->in_backend_free)
         return;
 
     sess->in_backend_free = true;
@@ -942,6 +1158,7 @@ static void session_reconnect(WebKitSession *sess)
     session_write_terminal(sess, "\r\x1b[2K\x1b[1;36m[自动重连] 正在尝试连接...\x1b[0m\r\n");
 
     session_cleanup_backend(sess);
+    sess->tried_saved_pw = false;
 
     bufchain_clear(&sess->send_queue);
     sess->send_timer_active = false;
@@ -1055,10 +1272,176 @@ static size_t webkit_seat_banner(Seat *seat, const void *data, size_t len)
     return webkit_seat_output(seat, SEAT_OUTPUT_STDOUT, data, len);
 }
 
+static void session_handle_prompt_input(WebKitSession *sess, const char *data, size_t len)
+{
+    if (!sess || !sess->cur_prompts || !data || len == 0)
+        return;
+
+    prompts_t *p = sess->cur_prompts;
+    if (sess->cur_prompt_idx >= p->n_prompts)
+        return;
+
+    prompt_t *pr = p->prompts[sess->cur_prompt_idx];
+
+    for (size_t i = 0; i < len; i++) {
+        char c = data[i];
+
+        if (c == '\r' || c == '\n') {
+            if (c == '\r' && i + 1 < len && data[i + 1] == '\n') {
+                i++;
+            }
+
+            const char *val = (sess->prompt_input_buf && sess->prompt_input_buf->s) ?
+                              sess->prompt_input_buf->s : "";
+            prompt_set_result(pr, val);
+
+            if (pr->echo) {
+                strncpy(sess->temp_prompt_user, val, sizeof(sess->temp_prompt_user) - 1);
+                sess->temp_prompt_user[sizeof(sess->temp_prompt_user) - 1] = '\0';
+            } else {
+                strncpy(sess->temp_prompt_pass, val, sizeof(sess->temp_prompt_pass) - 1);
+                sess->temp_prompt_pass[sizeof(sess->temp_prompt_pass) - 1] = '\0';
+            }
+
+            session_write_terminal(sess, "\r\n");
+            if (sess->prompt_input_buf) {
+                strbuf_clear(sess->prompt_input_buf);
+            }
+
+            sess->cur_prompt_idx++;
+            if (sess->cur_prompt_idx < p->n_prompts) {
+                prompt_t *next_pr = p->prompts[sess->cur_prompt_idx];
+                session_write_terminal(sess, next_pr->prompt);
+                pr = next_pr;
+            } else {
+                sess->cur_prompts = NULL;
+                p->spr = SPR_OK;
+                if (p->callback) {
+                    queue_toplevel_callback(p->callback, p->callback_ctx);
+                }
+                return;
+            }
+        } else if (c == '\x08' || c == '\x7f') {
+            if (sess->prompt_input_buf && sess->prompt_input_buf->len > 0) {
+                strbuf_shrink_by(sess->prompt_input_buf, 1);
+                if (pr->echo) {
+                    session_write_terminal(sess, "\b \b");
+                }
+            }
+        } else if (c == '\x03') {
+            session_write_terminal(sess, "^C\r\n");
+            if (sess->prompt_input_buf) {
+                strbuf_clear(sess->prompt_input_buf);
+            }
+            sess->cur_prompts = NULL;
+            p->spr = SPR_USER_ABORT;
+            if (p->callback) {
+                queue_toplevel_callback(p->callback, p->callback_ctx);
+            }
+            return;
+        } else if ((unsigned char)c >= 0x20) {
+            if (!sess->prompt_input_buf) {
+                sess->prompt_input_buf = strbuf_new_nm();
+            }
+            put_byte(sess->prompt_input_buf, c);
+            if (pr->echo) {
+                char echo_str[2] = { c, '\0' };
+                session_write_terminal(sess, echo_str);
+            }
+        }
+    }
+}
+
 static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
 {
-    WinGuiSeat *wgs = container_of(seat, WinGuiSeat, seat);
-    return cmdline_get_passwd_input(p, &wgs->cmdline_get_passwd_state, false);
+    WebKitSession *sess = session_from_seat(seat);
+    if (!sess)
+        return SPR_SW_ABORT("Session not found");
+
+    if (p->spr.kind != SPRK_INCOMPLETE)
+        return p->spr;
+
+    const char *host = conf_get_str(sess->cfg, CONF_host);
+    int port = conf_get_int(sess->cfg, CONF_port);
+
+    /* 1. Try command line password if supplied */
+    SeatPromptResult spr = cmdline_get_passwd_input(p, &sess->wgs.cmdline_get_passwd_state, false);
+    if (spr.kind != SPRK_INCOMPLETE)
+        return spr;
+
+    /* 2. Try loading credentials from pw/ directory if not tried yet */
+    if (!sess->tried_saved_pw && host && *host) {
+        char saved_user[128] = {0};
+        char saved_pass[256] = {0};
+        if (pw_load_credential(host, port, saved_user, sizeof(saved_user), saved_pass, sizeof(saved_pass))) {
+            sess->tried_saved_pw = true;
+            bool all_filled = true;
+
+            for (size_t i = 0; i < p->n_prompts; i++) {
+                prompt_t *pr = p->prompts[i];
+                if (pr->echo) {
+                    /* Username prompt */
+                    const char *u = (saved_user[0] != '\0') ? saved_user : conf_get_str(sess->cfg, CONF_username);
+                    if (u && *u) {
+                        prompt_set_result(pr, u);
+                        session_write_terminal(sess, pr->prompt);
+                        session_write_terminal(sess, u);
+                        session_write_terminal(sess, "\r\n");
+                    } else {
+                        all_filled = false;
+                    }
+                } else {
+                    /* Password prompt */
+                    if (saved_pass[0] != '\0') {
+                        prompt_set_result(pr, saved_pass);
+                        session_write_terminal(sess, pr->prompt);
+                        session_write_terminal(sess, "\x1b[1;33m[使用已加密保存的密码]\x1b[0m\r\n");
+                    } else {
+                        all_filled = false;
+                    }
+                }
+            }
+
+            smemclr(saved_pass, sizeof(saved_pass));
+
+            if (all_filled) {
+                p->spr = SPR_OK;
+                return SPR_OK;
+            }
+        }
+    }
+
+    /* 3. Interactive prompt in terminal */
+    sess->cur_prompts = p;
+    sess->cur_prompt_idx = 0;
+    if (!sess->prompt_input_buf) {
+        sess->prompt_input_buf = strbuf_new_nm();
+    } else {
+        strbuf_clear(sess->prompt_input_buf);
+    }
+
+    /* Display instruction or name if required */
+    if (p->name_reqd && p->name && *p->name) {
+        session_write_terminal(sess, "\r\n\x1b[1;37m");
+        session_write_terminal(sess, p->name);
+        session_write_terminal(sess, "\x1b[0m\r\n");
+    }
+    if (p->instruction && *p->instruction) {
+        session_write_terminal(sess, p->instruction);
+        session_write_terminal(sess, "\r\n");
+    }
+
+    /* Output first prompt string */
+    if (sess->cur_prompt_idx < p->n_prompts) {
+        prompt_t *pr = p->prompts[sess->cur_prompt_idx];
+        session_write_terminal(sess, pr->prompt);
+    } else {
+        sess->cur_prompts = NULL;
+        p->spr = SPR_OK;
+        return SPR_OK;
+    }
+
+    return SPR_INCOMPLETE;
 }
 
 static void webkit_seat_notify_session_started(Seat *seat)
@@ -1066,6 +1449,20 @@ static void webkit_seat_notify_session_started(Seat *seat)
     WebKitSession *sess = session_from_seat(seat);
     if (!sess) return;
     sess->is_connected = true;
+
+    /* If user entered password during interactive prompt, save it encrypted into pw/ */
+    if (sess->temp_prompt_pass[0] != '\0') {
+        const char *host = conf_get_str(sess->cfg, CONF_host);
+        int port = conf_get_int(sess->cfg, CONF_port);
+        const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str(sess->cfg, CONF_username);
+
+        if (pw_save_credential(host, port, user, sess->temp_prompt_pass)) {
+            session_write_terminal(sess, "\x1b[1;32m[已加密保存凭据至 pw/ 目录，下次将自动免密登录]\x1b[0m\r\n");
+        }
+        smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
+        sess->temp_prompt_pass[0] = '\0';
+    }
+
     if (sess->auto_reconnect) {
         session_write_terminal(sess, "\x1b[1;32m[自动重连成功]\x1b[0m\r\n");
     }
@@ -1707,7 +2104,11 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             const char *data = colon + 1;
             WebKitSession *sess = session_find(sess_id);
             if (sess) {
-                session_send(sess, data, strlen(data));
+                if (sess->cur_prompts) {
+                    session_handle_prompt_input(sess, data, strlen(data));
+                } else {
+                    session_send(sess, data, strlen(data));
+                }
             }
         }
     } else if (type == '1') {

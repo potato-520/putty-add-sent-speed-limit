@@ -235,6 +235,7 @@ endif()
 target_link_libraries(putty_webkit
   ${CMAKE_CURRENT_SOURCE_DIR}/webkit/lib/x64/WebView2LoaderStatic.lib
   version
+  crypt32
   guiterminal guimisc eventloop sshclient otherbackends settings network crypto
   utils
   ${platform_libraries})
