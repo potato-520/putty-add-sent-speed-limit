@@ -16,6 +16,7 @@
 #include "win-gui-seat.h"
 
 #include <commctrl.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include "webkit/webview_host.h"
 
@@ -237,6 +238,7 @@ typedef struct WebKitSession {
     bool is_logging;
     bool log_enabled;
     char log_filename[MAX_PATH];
+    bool is_connected;
     bool auto_reconnect;
     bool reconnect_timer_active;
     int reconnect_countdown;
@@ -247,6 +249,14 @@ typedef struct WebKitSession {
 
 static WebKitSession *sessions_head = NULL;
 static int next_session_id = 1;
+
+static bool session_is_connected(WebKitSession *sess)
+{
+    if (!sess) return false;
+    if (!sess->is_connected) return false;
+    if (!sess->backend) return false;
+    return backend_connected(sess->backend);
+}
 
 static WebKitSession *session_from_seat(Seat *seat)
 {
@@ -539,6 +549,145 @@ static void session_write_terminal(WebKitSession *sess, const char *text)
     }
 }
 
+static void strip_ansi_sequences(const char *src, size_t src_len, char **out_buf, size_t *out_len)
+{
+    char *dst = snewn(src_len + 1, char);
+    size_t di = 0;
+    size_t si = 0;
+
+    while (si < src_len) {
+        if ((unsigned char)src[si] == 0x1B) { /* ESC */
+            si++;
+            if (si >= src_len) break;
+            char c = src[si++];
+            if (c == '[') {
+                /* CSI: ESC [ [parameter/intermediate bytes] final_byte */
+                while (si < src_len && (unsigned char)src[si] >= 0x20 && (unsigned char)src[si] <= 0x3F) {
+                    si++;
+                }
+                if (si < src_len && (unsigned char)src[si] >= 0x40 && (unsigned char)src[si] <= 0x7E) {
+                    si++;
+                }
+            } else if (c == ']' || c == 'P' || c == '_' || c == '^') {
+                /* OSC, DCS, APC, PM: ESC ] ... (BEL or ST: ESC \) */
+                while (si < src_len) {
+                    if ((unsigned char)src[si] == 0x07) { /* BEL */
+                        si++;
+                        break;
+                    }
+                    if ((unsigned char)src[si] == 0x1B) { /* ST part 1 */
+                        si++;
+                        if (si < src_len && src[si] == '\\') { /* ST part 2 */
+                            si++;
+                        }
+                        break;
+                    }
+                    si++;
+                }
+            } else if (c == '(' || c == ')' || c == '*' || c == '+') {
+                /* Charset designator: ESC ( 0, etc. */
+                if (si < src_len) si++;
+            } else {
+                /* 2-character escape sequence (e.g. ESC =, ESC >, ESC M, etc.) */
+            }
+        } else {
+            dst[di++] = src[si++];
+        }
+    }
+    dst[di] = '\0';
+    *out_buf = dst;
+    *out_len = di;
+}
+
+static void strip_log_ansi_via_dialog(HWND hwnd)
+{
+    wchar_t szFile[MAX_PATH] = {0};
+    wchar_t initial_dir[MAX_PATH] = {0};
+
+    /* Check default logs directory */
+    wchar_t exe_path[MAX_PATH];
+    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    wchar_t *p = wcsrchr(exe_path, L'\\');
+    if (p) *p = L'\0';
+    _snwprintf(initial_dir, MAX_PATH, L"%s\\logs", exe_path);
+    DWORD attr = GetFileAttributesW(initial_dir);
+    if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        initial_dir[0] = L'\0';
+    }
+
+    OPENFILENAMEW ofn;
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
+    ofn.lpstrFilter = L"Log Files (*.log;*.txt)\0*.log;*.txt\0All Files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrInitialDir = initial_dir[0] ? initial_dir : NULL;
+    ofn.lpstrTitle = L"选择需要去除颜色编码的 SSH 日志文件 (Select SSH Log File)";
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+
+    if (!GetOpenFileNameW(&ofn)) {
+        return; /* User cancelled */
+    }
+
+    wchar_t outPath[MAX_PATH] = {0};
+    const wchar_t *last_sep = wcsrchr(szFile, L'\\');
+    const wchar_t *last_dot = wcsrchr(szFile, L'.');
+
+    if (last_dot && (!last_sep || last_dot > last_sep)) {
+        int prefix_len = (int)(last_dot - szFile);
+        _snwprintf(outPath, MAX_PATH, L"%.*s_uncolored%s", prefix_len, szFile, last_dot);
+    } else {
+        _snwprintf(outPath, MAX_PATH, L"%s_uncolored", szFile);
+    }
+
+    FILE *fp_in = _wfopen(szFile, L"rb");
+    if (!fp_in) {
+        MessageBoxW(hwnd, L"无法打开源文件！", L"错误", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    fseek(fp_in, 0, SEEK_END);
+    long fsize = ftell(fp_in);
+    fseek(fp_in, 0, SEEK_SET);
+
+    if (fsize < 0) {
+        fclose(fp_in);
+        MessageBoxW(hwnd, L"读取文件大小失败！", L"错误", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    char *src_buf = snewn(fsize + 1, char);
+    size_t read_bytes = fread(src_buf, 1, fsize, fp_in);
+    fclose(fp_in);
+
+    char *out_buf = NULL;
+    size_t out_len = 0;
+    strip_ansi_sequences(src_buf, read_bytes, &out_buf, &out_len);
+    sfree(src_buf);
+
+    FILE *fp_out = _wfopen(outPath, L"wb");
+    if (!fp_out) {
+        sfree(out_buf);
+        MessageBoxW(hwnd, L"无法创建输出文件！", L"错误", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    fwrite(out_buf, 1, out_len, fp_out);
+    fclose(fp_out);
+    sfree(out_buf);
+
+    wchar_t msg[MAX_PATH + 160];
+    _snwprintf(msg, sizeof(msg) / sizeof(msg[0]),
+               L"已成功去除颜色控制编码！\n\n新文件已保存至：\n%s\n\n是否打开所在文件夹？", outPath);
+    if (MessageBoxW(hwnd, msg, L"SSH 日志颜色去除完成", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+        wchar_t param[MAX_PATH + 16];
+        _snwprintf(param, sizeof(param) / sizeof(param[0]), L"/select,\"%s\"", outPath);
+        ShellExecuteW(hwnd, L"open", L"explorer.exe", param, NULL, SW_SHOWNORMAL);
+    }
+}
+
 static void session_reconnect(WebKitSession *sess);
 static void session_schedule_reconnect(WebKitSession *sess);
 
@@ -575,6 +724,9 @@ static void session_reconnect(WebKitSession *sess)
     if (!sess) return;
     if (sess->backend && backend_connected(sess->backend))
     if (!sess->auto_reconnect)
+    if (!sess || !sess->auto_reconnect)
+        return;
+    if (session_is_connected(sess))
         return;
 
     session_write_terminal(sess, "\r\x1b[2K\x1b[1;36m[自动重连] 正在尝试连接...\x1b[0m\r\n");
@@ -614,6 +766,12 @@ static void session_reconnect(WebKitSession *sess)
         snprintf(banner, sizeof(banner), "\x1b[1;31m[连接失败: %s]\x1b[0m\r\n", err);
         session_write_terminal(sess, banner);
         sfree(err);
+        if (sess->backend) {
+            backend_free(sess->backend);
+            sess->backend = NULL;
+            sess->wgs.backend = NULL;
+        }
+        sess->is_connected = false;
         if (sess->hwnd) {
             webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         }
@@ -621,6 +779,7 @@ static void session_reconnect(WebKitSession *sess)
             session_schedule_reconnect(sess);
         }
     } else {
+        sess->is_connected = true;
         sess->wgs.backend = sess->backend;
         if (proto == PROT_SERIAL || proto == PROT_CONPTY || proto == PROT_RAW) {
             if (sess->auto_reconnect) {
@@ -653,6 +812,7 @@ static void session_toggle_auto_reconnect(WebKitSession *sess)
     if (sess->auto_reconnect) {
         session_write_terminal(sess, "\r\n\x1b[1;32m[自动重连已开启]\x1b[0m\r\n");
         if ((!sess->backend || !backend_connected(sess->backend)) && !sess->reconnect_timer_active) {
+        if (!session_is_connected(sess) && !sess->reconnect_timer_active) {
             session_schedule_reconnect(sess);
         }
     } else {
@@ -734,6 +894,7 @@ static void webkit_seat_notify_remote_exit(Seat *seat)
         sess->backend = NULL;
         sess->wgs.backend = NULL;
     }
+    sess->is_connected = false;
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, "\r\n\x1b[31m[Connection closed by remote host]\x1b[0m\r\n", 48);
@@ -759,6 +920,7 @@ static void webkit_seat_notify_remote_disconnect(Seat *seat)
         sess->backend = NULL;
         sess->wgs.backend = NULL;
     }
+    sess->is_connected = false;
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, "\r\n\x1b[1;31m[Connection disconnected]\x1b[0m\r\n", 39);
@@ -784,6 +946,7 @@ static void webkit_seat_connection_fatal(Seat *seat, const char *msg)
         sess->backend = NULL;
         sess->wgs.backend = NULL;
     }
+    sess->is_connected = false;
     if (sess->hwnd) {
         webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
         char banner[512];
@@ -1062,10 +1225,17 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
             webview_host_send_session_text_to_window(target_hwnd, '2', sess->id, "disconnected");
         }
         sfree(err);
+        if (sess->backend) {
+            backend_free(sess->backend);
+            sess->backend = NULL;
+            sess->wgs.backend = NULL;
+        }
+        sess->is_connected = false;
         if (sess->auto_reconnect) {
             session_schedule_reconnect(sess);
         }
     } else {
+        sess->is_connected = true;
         sess->wgs.backend = sess->backend;
     }
 
@@ -1227,6 +1397,7 @@ static void session_attach_to_window(HWND target_hwnd, int sess_id)
     webview_host_send_to_window(target_hwnd, tab_msg);
     webview_host_send_session_text_to_window(target_hwnd, '2', sess->id,
         (sess->backend && backend_connected(sess->backend)) ? "connected" : "disconnected");
+        session_is_connected(sess) ? "connected" : "disconnected");
 
     char log_msg[MAX_PATH + 32];
     if (sess->log_enabled) {
@@ -1372,6 +1543,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                 webview_host_send_to_window(hwnd, tab_msg);
                 webview_host_send_session_text_to_window(hwnd, '2', s->id,
                     (s->backend && backend_connected(s->backend)) ? "connected" : "disconnected");
+                    session_is_connected(s) ? "connected" : "disconnected");
                 char log_msg[MAX_PATH + 32];
                 if (s->log_enabled) {
                     snprintf(log_msg, sizeof(log_msg), "L%d:1:%s", s->id, s->log_filename);
@@ -1416,6 +1588,8 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
     } else if (type == '3') {
         if (!strcmp(payload, "new_tab")) {
             session_new_via_dialog(hwnd);
+        } else if (!strcmp(payload, "strip_log_ansi")) {
+            strip_log_ansi_via_dialog(hwnd);
         } else if (strstr(payload, ":toggle_log")) {
             int sess_id = atoi(payload);
             WebKitSession *sess = session_find(sess_id);

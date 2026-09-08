@@ -228,6 +228,10 @@ target_include_directories(putty_webkit PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/webkit
 )
 
+if(MSVC)
+  target_compile_options(putty_webkit PRIVATE "/utf-8")
+endif()
+
 target_link_libraries(putty_webkit
   ${CMAKE_CURRENT_SOURCE_DIR}/webkit/lib/x64/WebView2LoaderStatic.lib
   version
