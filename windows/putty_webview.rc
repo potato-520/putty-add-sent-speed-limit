@@ -1,7 +1,7 @@
 #include "rcstuff.h"
 #include "putty-rc.h"
 
-#define APPNAME "PuTTY-WebKit"
+#define APPNAME "PuTTY-WebView"
 #define APPDESC "Modern Web-based PuTTY / ConPTY Terminal"
 
 IDI_MAINICON ICON "putty.ico"
@@ -20,9 +20,9 @@ IDI_CFGICON ICON "puttycfg.ico"
 #define IDR_WEB_FIT_ADDON_JS        2004
 #define IDR_WEB_WEBLINKS_ADDON_JS   2005
 
-IDR_WEB_INDEX_HTML          RCDATA "webkit/web/index.html"
-IDR_WEB_XTERM_JS            RCDATA "webkit/web/xterm.js"
-IDR_WEB_XTERM_CSS           RCDATA "webkit/web/xterm.css"
-IDR_WEB_FIT_ADDON_JS        RCDATA "webkit/web/xterm-addon-fit.js"
-IDR_WEB_WEBLINKS_ADDON_JS   RCDATA "webkit/web/xterm-addon-web-links.js"
+IDR_WEB_INDEX_HTML          RCDATA "webview/web/index.html"
+IDR_WEB_XTERM_JS            RCDATA "webview/web/xterm.js"
+IDR_WEB_XTERM_CSS           RCDATA "webview/web/xterm.css"
+IDR_WEB_FIT_ADDON_JS        RCDATA "webview/web/xterm-addon-fit.js"
+IDR_WEB_WEBLINKS_ADDON_JS   RCDATA "webview/web/xterm-addon-web-links.js"
 

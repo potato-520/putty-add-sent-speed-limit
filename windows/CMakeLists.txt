@@ -213,37 +213,40 @@ string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}
 string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
-add_executable(putty_webkit
-  putty_webkit.c
+add_executable(putty_webview
+  putty_webview.c
   conpty.c
-  webkit/webview_host.cpp
+  webview/webview_host.cpp
   help.c
   ${CMAKE_SOURCE_DIR}/stubs/no-console.c
-  putty_webkit.rc)
-be_list(putty_webkit PuTTY_WebKit SSH SERIAL OTHERBACKENDS CONPTY)
-add_dependencies(putty_webkit generated_licence_h)
+  putty_webview.rc)
+be_list(putty_webview PuTTY_WebView SSH SERIAL OTHERBACKENDS CONPTY)
+add_dependencies(putty_webview generated_licence_h)
 
-target_include_directories(putty_webkit PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/webkit/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/webkit
+target_include_directories(putty_webview PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/webview/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/webview
 )
 
 if(MSVC)
-  target_compile_options(putty_webkit PRIVATE "/utf-8")
+  target_compile_options(putty_webview PRIVATE "/utf-8")
 endif()
 
-target_link_libraries(putty_webkit
-  ${CMAKE_CURRENT_SOURCE_DIR}/webkit/lib/x64/WebView2LoaderStatic.lib
+target_link_libraries(putty_webview
+  ${CMAKE_CURRENT_SOURCE_DIR}/webview/lib/x64/WebView2LoaderStatic.lib
   version
   crypt32
   guiterminal guimisc eventloop sshclient otherbackends settings network crypto
   utils
   ${platform_libraries})
-set_target_properties(putty_webkit PROPERTIES WIN32_EXECUTABLE ON)
-installed_program(putty_webkit)
+set_target_properties(putty_webview PROPERTIES WIN32_EXECUTABLE ON)
+installed_program(putty_webview)
 
-add_custom_command(TARGET putty_webkit POST_BUILD
+add_custom_command(TARGET putty_webview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_CURRENT_SOURCE_DIR}/webkit/web
-    $<TARGET_FILE_DIR:putty_webkit>/webkit/web
+    ${CMAKE_CURRENT_SOURCE_DIR}/webview/web
+    $<TARGET_FILE_DIR:putty_webview>/webview/web
 )
+
+add_custom_target(putty_webkit DEPENDS putty_webview)
+

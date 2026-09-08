@@ -150,7 +150,7 @@ static void SetupWindowController(std::shared_ptr<WebViewWindow> win,
         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
             [win, initial_url](HRESULT result, ICoreWebView2Controller *controller) -> HRESULT {
                 if (FAILED(result) || !controller) {
-                    MessageBoxA(win->hwnd, "Failed to create WebView2 Controller.", "PuTTY-WebKit", MB_OK | MB_ICONERROR);
+                    MessageBoxA(win->hwnd, "Failed to create WebView2 Controller.", "PuTTY-WebView", MB_OK | MB_ICONERROR);
                     return result;
                 }
 
@@ -227,7 +227,7 @@ bool webview_host_init(HWND hwnd, const wchar_t *html_path,
 
     wchar_t temp_dir[MAX_PATH];
     GetTempPathW(MAX_PATH, temp_dir);
-    std::wstring user_data_folder = std::wstring(temp_dir) + L"putty_webkit_data";
+    std::wstring user_data_folder = std::wstring(temp_dir) + L"putty_webview_data";
 
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
         nullptr, user_data_folder.c_str(), nullptr,
@@ -238,7 +238,7 @@ bool webview_host_init(HWND hwnd, const wchar_t *html_path,
                         "Failed to initialize WebView2 Runtime.\n"
                         "Please install the Microsoft Edge WebView2 Runtime from:\n"
                         "https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
-                        "PuTTY-WebKit", MB_OK | MB_ICONERROR);
+                        "PuTTY-WebView", MB_OK | MB_ICONERROR);
                     return result;
                 }
                 s_environment = env;

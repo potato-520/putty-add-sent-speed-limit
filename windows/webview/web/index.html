@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PuTTY-WebKit Terminal</title>
+  <title>PuTTY-WebView Terminal</title>
   <link rel="stylesheet" href="xterm.css" />
   <style>
     * {
@@ -1376,7 +1376,7 @@
 
         if (g.activeSessionId && sessions[g.activeSessionId]) {
           activeGlobalSessionId = g.activeSessionId;
-          document.title = `${sessions[g.activeSessionId].title} - PuTTY-WebKit`;
+          document.title = `${sessions[g.activeSessionId].title} - PuTTY-WebView`;
           if (typeof updateMleSessionIfOpen === 'function') {
             updateMleSessionIfOpen(activeGlobalSessionId);
           }
@@ -1453,7 +1453,7 @@
         cur.tabEl.classList.add('active');
         cur.viewEl.classList.add('active');
         activeGlobalSessionId = sid;
-        document.title = `${cur.title} - PuTTY-WebKit`;
+        document.title = `${cur.title} - PuTTY-WebView`;
         if (typeof updateMleSessionIfOpen === 'function') {
           updateMleSessionIfOpen(sid);
         }
@@ -1703,7 +1703,7 @@
       s.tabEl.title = dir ? `会话: ${s.baseTitle}\n当前目录: ${dir}` : s.baseTitle;
 
       if (activeGlobalSessionId === id) {
-        document.title = `${displayTitle} - PuTTY-WebKit`;
+        document.title = `${displayTitle} - PuTTY-WebView`;
       }
     }
 
@@ -2071,7 +2071,7 @@
           }
         } else {
           activeGlobalSessionId = null;
-          document.title = 'PuTTY-WebKit';
+          document.title = 'PuTTY-WebView';
         }
       }
     }

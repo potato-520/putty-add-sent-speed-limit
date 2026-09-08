@@ -1,5 +1,5 @@
 /*
- * putty_webkit.c - Modern Web-based frontend host for PuTTY / Plink core.
+ * putty_webview.c - Modern Web-based frontend host for PuTTY / Plink core.
  * Phase 3: Full-duplex SSH & Serial backend integration with ttyd protocol.
  */
 
@@ -22,7 +22,7 @@
 #include <sddl.h>
 #include <wincrypt.h>
 #pragma comment(lib, "crypt32.lib")
-#include "webkit/webview_host.h"
+#include "webview/webview_host.h"
 
 /* appname is generated in be_list.c by be_list() macro */
 
@@ -36,12 +36,12 @@ const bool share_can_be_upstream = true;
 
 HINSTANCE hinst;
 
-typedef struct WebKitWindow {
+typedef struct WebViewWindow {
     HWND hwnd;
-    struct WebKitWindow *next;
-} WebKitWindow;
+    struct WebViewWindow *next;
+} WebViewWindow;
 
-static WebKitWindow *windows_head = NULL;
+static WebViewWindow *windows_head = NULL;
 static wchar_t global_html_path[MAX_PATH] = {0};
 static wchar_t target_web_dir[MAX_PATH] = {0};
 
@@ -50,7 +50,7 @@ static void dbg_log(const char *fmt, ...)
     char temp[MAX_PATH];
     GetTempPathA(MAX_PATH, temp);
     char logpath[MAX_PATH];
-    snprintf(logpath, sizeof(logpath), "%sputty_webkit_debug.log", temp);
+    snprintf(logpath, sizeof(logpath), "%sputty_webview_debug.log", temp);
 
     FILE *f = fopen(logpath, "a");
     if (!f) return;
@@ -117,7 +117,7 @@ static bool create_directory_recursive(const wchar_t *dir)
     return CreateDirectoryW(tmp, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
+static void ensure_webview_assets(wchar_t *out_html_path, size_t max_len)
 {
     wchar_t exe_path[MAX_PATH];
     GetModuleFileNameW(NULL, exe_path, MAX_PATH);
@@ -126,7 +126,7 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
 
     /* 1. Check development tree fallback (source checkout) FIRST so dev edits are instant */
     wchar_t dev_html[MAX_PATH];
-    _snwprintf(dev_html, MAX_PATH, L"%s\\..\\..\\windows\\webkit\\web\\index.html", exe_path);
+    _snwprintf(dev_html, MAX_PATH, L"%s\\..\\..\\windows\\webview\\web\\index.html", exe_path);
     if (GetFileAttributesW(dev_html) != INVALID_FILE_ATTRIBUTES) {
         wcsncpy(out_html_path, dev_html, max_len - 1);
         out_html_path[max_len - 1] = L'\0';
@@ -134,7 +134,7 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
     }
 
     /* 2. Deployed standalone mode: ensure target directory exists */
-    _snwprintf(target_web_dir, MAX_PATH, L"%s\\webkit\\web", exe_path);
+    _snwprintf(target_web_dir, MAX_PATH, L"%s\\webview\\web", exe_path);
     _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
 
     bool dir_ok = create_directory_recursive(target_web_dir);
@@ -142,14 +142,14 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
         /* If exe directory is read-only (e.g. Program Files), fall back to %LOCALAPPDATA% */
         wchar_t appdata[MAX_PATH];
         if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
-            _snwprintf(target_web_dir, MAX_PATH, L"%s\\PuTTY-WebKit\\webkit\\web", appdata);
+            _snwprintf(target_web_dir, MAX_PATH, L"%s\\PuTTY-WebView\\webview\\web", appdata);
             create_directory_recursive(target_web_dir);
             _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
         }
     }
 
     /* 3. Fast synchronous verification & sync of embedded assets (< 1ms total)
-     * Automatically updates disk files if exe is upgraded, without requiring manual deletion of webkit/ */
+     * Automatically updates disk files if exe is upgraded, without requiring manual deletion of webview/ */
     for (size_t i = 0; i < NUM_EMBEDDED_ASSETS; i++) {
         HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_assets[i].res_id), MAKEINTRESOURCEW(10));
         if (!hrsrc) continue;
@@ -181,7 +181,7 @@ static void ensure_webkit_assets(wchar_t *out_html_path, size_t max_len)
 
 #define REPLAY_BUF_SIZE (64 * 1024)
 
-typedef struct WebKitSession {
+typedef struct WebViewSession {
     int id;
     char name[128];
     Conf *cfg;
@@ -222,13 +222,13 @@ typedef struct WebKitSession {
     int prompt_attempts;
     bool username_displayed;
 
-    struct WebKitSession *next;
-} WebKitSession;
+    struct WebViewSession *next;
+} WebViewSession;
 
-static WebKitSession *sessions_head = NULL;
+static WebViewSession *sessions_head = NULL;
 static int next_session_id = 1;
 
-static bool session_is_connected(WebKitSession *sess)
+static bool session_is_connected(WebViewSession *sess)
 {
     if (!sess) return false;
     if (!sess->is_connected) return false;
@@ -236,15 +236,15 @@ static bool session_is_connected(WebKitSession *sess)
     return backend_connected(sess->backend);
 }
 
-static WebKitSession *session_from_seat(Seat *seat)
+static WebViewSession *session_from_seat(Seat *seat)
 {
     WinGuiSeat *wgs = container_of(seat, WinGuiSeat, seat);
-    return container_of(wgs, WebKitSession, wgs);
+    return container_of(wgs, WebViewSession, wgs);
 }
 
-static WebKitSession *session_find(int id)
+static WebViewSession *session_find(int id)
 {
-    for (WebKitSession *s = sessions_head; s; s = s->next) {
+    for (WebViewSession *s = sessions_head; s; s = s->next) {
         if (s->id == id)
             return s;
     }
@@ -262,16 +262,16 @@ static bool session_send_tick_due(unsigned long now, unsigned long due)
     return now - due < INT_MAX;
 }
 
-static void session_send_queue_try(WebKitSession *sess);
+static void session_send_queue_try(WebViewSession *sess);
 
 static void session_send_queue_timer(void *ctx, unsigned long now)
 {
-    WebKitSession *sess = (WebKitSession *)ctx;
+    WebViewSession *sess = (WebViewSession *)ctx;
     sess->send_timer_active = false;
     session_send_queue_try(sess);
 }
 
-static void session_send_queue_arm(WebKitSession *sess, unsigned long now)
+static void session_send_queue_arm(WebViewSession *sess, unsigned long now)
 {
     if (sess->send_timer_active)
         return;
@@ -282,7 +282,7 @@ static void session_send_queue_arm(WebKitSession *sess, unsigned long now)
     schedule_timer(wait, session_send_queue_timer, sess);
 }
 
-static void session_send_queue_try(WebKitSession *sess)
+static void session_send_queue_try(WebViewSession *sess)
 {
     if (!sess || !sess->backend || !backend_connected(sess->backend) || !backend_sendok(sess->backend))
         return;
@@ -322,7 +322,7 @@ static void session_send_queue_try(WebKitSession *sess)
     }
 }
 
-static void session_send(WebKitSession *sess, const void *data, size_t len)
+static void session_send(WebViewSession *sess, const void *data, size_t len)
 {
     if (!sess || !sess->backend || !data || len == 0)
         return;
@@ -338,7 +338,7 @@ static void session_send(WebKitSession *sess, const void *data, size_t len)
     session_send_queue_try(sess);
 }
 
-static void session_record_output(WebKitSession *sess, const void *data, size_t len)
+static void session_record_output(WebViewSession *sess, const void *data, size_t len)
 {
     const char *src = (const char *)data;
     for (size_t i = 0; i < len; i++) {
@@ -349,7 +349,7 @@ static void session_record_output(WebKitSession *sess, const void *data, size_t 
     }
 }
 
-static void session_replay_output(HWND target_hwnd, WebKitSession *sess)
+static void session_replay_output(HWND target_hwnd, WebViewSession *sess)
 {
     if (sess->replay_len == 0 || !target_hwnd) return;
     char *linear = (char *)smalloc(sess->replay_len);
@@ -362,29 +362,29 @@ static void session_replay_output(HWND target_hwnd, WebKitSession *sess)
 }
 
 /* Forward declarations */
-static LRESULT CALLBACK WebKitWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void on_web_message(HWND hwnd, const char *msg, void *userdata);
-static HWND create_webkit_window(int x, int y, int width, int height);
-static size_t webkit_seat_output(Seat *seat, SeatOutputType type,
+static HWND create_webview_window(int x, int y, int width, int height);
+static size_t webview_seat_output(Seat *seat, SeatOutputType type,
                                  const void *data, size_t len);
-static bool webkit_seat_eof(Seat *seat);
-static size_t webkit_seat_banner(Seat *seat, const void *data, size_t len);
-static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p);
-static void webkit_seat_notify_session_started(Seat *seat);
-static void webkit_seat_notify_remote_exit(Seat *seat);
-static void webkit_seat_notify_remote_disconnect(Seat *seat);
-static void webkit_seat_connection_fatal(Seat *seat, const char *msg);
+static bool webview_seat_eof(Seat *seat);
+static size_t webview_seat_banner(Seat *seat, const void *data, size_t len);
+static SeatPromptResult webview_seat_get_userpass_input(Seat *seat, prompts_t *p);
+static void webview_seat_notify_session_started(Seat *seat);
+static void webview_seat_notify_remote_exit(Seat *seat);
+static void webview_seat_notify_remote_disconnect(Seat *seat);
+static void webview_seat_connection_fatal(Seat *seat, const char *msg);
 
-static const SeatVtable webkit_seat_vt = {
-    .output = webkit_seat_output,
-    .eof = webkit_seat_eof,
+static const SeatVtable webview_seat_vt = {
+    .output = webview_seat_output,
+    .eof = webview_seat_eof,
     .sent = nullseat_sent,
-    .banner = webkit_seat_banner,
-    .get_userpass_input = webkit_seat_get_userpass_input,
-    .notify_session_started = webkit_seat_notify_session_started,
-    .notify_remote_exit = webkit_seat_notify_remote_exit,
-    .notify_remote_disconnect = webkit_seat_notify_remote_disconnect,
-    .connection_fatal = webkit_seat_connection_fatal,
+    .banner = webview_seat_banner,
+    .get_userpass_input = webview_seat_get_userpass_input,
+    .notify_session_started = webview_seat_notify_session_started,
+    .notify_remote_exit = webview_seat_notify_remote_exit,
+    .notify_remote_disconnect = webview_seat_notify_remote_disconnect,
+    .connection_fatal = webview_seat_connection_fatal,
     .nonfatal = nullseat_nonfatal,
     .update_specials_menu = nullseat_update_specials_menu,
     .get_ttymode = nullseat_get_ttymode,
@@ -407,7 +407,7 @@ static const SeatVtable webkit_seat_vt = {
     .get_cursor_position = nullseat_get_cursor_position,
 };
 
-static void session_stop_log(WebKitSession *sess)
+static void session_stop_log(WebViewSession *sess)
 {
     if (!sess) return;
     if (sess->log_fp) {
@@ -425,7 +425,7 @@ static void session_stop_log(WebKitSession *sess)
     }
 }
 
-static bool session_start_log(WebKitSession *sess)
+static bool session_start_log(WebViewSession *sess)
 {
     if (!sess) return false;
     if (sess->log_fp) {
@@ -451,7 +451,7 @@ static bool session_start_log(WebKitSession *sess)
     if (!dir_ok) {
         wchar_t appdata[MAX_PATH];
         if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
-            _snwprintf(log_dir, MAX_PATH, L"%s\\PuTTY-WebKit\\logs", appdata);
+            _snwprintf(log_dir, MAX_PATH, L"%s\\PuTTY-WebView\\logs", appdata);
             create_directory_recursive(log_dir);
         }
     }
@@ -489,7 +489,7 @@ static bool session_start_log(WebKitSession *sess)
     sess->is_logging = true;
     strncpy(sess->log_filename, filename_utf8, sizeof(sess->log_filename) - 1);
 
-    fprintf(fp, "=~=~=~=~=~=~=~=~=~=~=~= PuTTY-WebKit log %04d.%02d.%02d %02d:%02d:%02d =~=~=~=~=~=~=~=~=~=~=\r\n",
+    fprintf(fp, "=~=~=~=~=~=~=~=~=~=~=~= PuTTY-WebView log %04d.%02d.%02d %02d:%02d:%02d =~=~=~=~=~=~=~=~=~=~=\r\n",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     fflush(fp);
 
@@ -503,7 +503,7 @@ static bool session_start_log(WebKitSession *sess)
     return true;
 }
 
-static void session_toggle_log(WebKitSession *sess)
+static void session_toggle_log(WebViewSession *sess)
 {
     if (!sess) return;
     if (sess->log_enabled) {
@@ -513,7 +513,7 @@ static void session_toggle_log(WebKitSession *sess)
     }
 }
 
-static void session_write_terminal(WebKitSession *sess, const char *text)
+static void session_write_terminal(WebViewSession *sess, const char *text)
 {
     if (!sess || !text) return;
     size_t len = strlen(text);
@@ -859,15 +859,16 @@ static void fix_ssh_key_perm_via_dialog(HWND hwnd)
     }
 }
 
-static void session_reconnect(WebKitSession *sess);
-static void session_schedule_reconnect(WebKitSession *sess);
+static void session_reconnect(WebViewSession *sess);
+static void session_schedule_reconnect(WebViewSession *sess);
 
 /* ============================================================================
  * Local Encrypted Credential Vault (pw/ directory)
  * Uses Windows DPAPI (CryptProtectData / CryptUnprotectData) with app-specific entropy
  * ============================================================================ */
 
-static const char PW_APP_ENTROPY[] = "PuTTY_WebKit_Vault_v1_Secret!#@9841&%_Key";
+static const char PW_APP_ENTROPY[] = "PuTTY_WebView_Vault_v1_Secret!#@9841&%_Key";
+static const char PW_APP_ENTROPY_LEGACY[] = "PuTTY_WebKit_Vault_v1_Secret!#@9841&%_Key";
 
 static void pw_get_dir(wchar_t *out_dir, size_t max_len)
 {
@@ -881,7 +882,7 @@ static void pw_get_dir(wchar_t *out_dir, size_t max_len)
     if (!ok) {
         wchar_t appdata[MAX_PATH];
         if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
-            _snwprintf(out_dir, max_len, L"%s\\PuTTY-WebKit\\pw", appdata);
+            _snwprintf(out_dir, max_len, L"%s\\PuTTY-WebView\\pw", appdata);
             create_directory_recursive(out_dir);
         }
     }
@@ -1002,7 +1003,7 @@ static bool pw_save_credential(const char *host, int port, const char *user, con
     DATA_BLOB data_out;
     ZeroMemory(&data_out, sizeof(data_out));
 
-    BOOL res = CryptProtectData(&data_in, L"PuTTY-WebKit SSH Credential", &entropy,
+    BOOL res = CryptProtectData(&data_in, L"PuTTY-WebView SSH Credential", &entropy,
                                 NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &data_out);
     smemclr(plaintext, sizeof(plaintext));
 
@@ -1083,6 +1084,12 @@ static bool pw_load_single_file(const wchar_t *filepath,
 
     BOOL res = CryptUnprotectData(&data_in, NULL, &entropy,
                                   NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &data_out);
+    if (!res || !data_out.pbData) {
+        entropy.pbData = (BYTE *)PW_APP_ENTROPY_LEGACY;
+        entropy.cbData = (DWORD)strlen(PW_APP_ENTROPY_LEGACY);
+        res = CryptUnprotectData(&data_in, NULL, &entropy,
+                                 NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &data_out);
+    }
     sfree(cipher_buf);
 
     if (!res || !data_out.pbData)
@@ -1345,7 +1352,7 @@ static void parse_auth_json(const char *json,
     }
 }
 
-static void session_cleanup_backend(WebKitSession *sess)
+static void session_cleanup_backend(WebViewSession *sess)
 {
     if (!sess)
         return;
@@ -1377,11 +1384,11 @@ static void session_cleanup_backend(WebKitSession *sess)
 
 static void session_close_backend_cb(void *vctx)
 {
-    WebKitSession *sess = (WebKitSession *)vctx;
+    WebViewSession *sess = (WebViewSession *)vctx;
     session_cleanup_backend(sess);
 }
 
-static void session_handle_disconnect(WebKitSession *sess, const char *reason)
+static void session_handle_disconnect(WebViewSession *sess, const char *reason)
 {
     if (!sess || sess->in_backend_free || sess->in_connecting)
         return;
@@ -1420,7 +1427,7 @@ static void session_handle_disconnect(WebKitSession *sess, const char *reason)
 
 static void session_reconnect_timer(void *ctx, unsigned long now)
 {
-    WebKitSession *sess = container_of((bool *)ctx, WebKitSession, reconnect_timer_active);
+    WebViewSession *sess = container_of((bool *)ctx, WebViewSession, reconnect_timer_active);
     if (!sess->reconnect_timer_active)
         return;
     sess->reconnect_timer_active = false;
@@ -1429,7 +1436,7 @@ static void session_reconnect_timer(void *ctx, unsigned long now)
     session_reconnect(sess);
 }
 
-static void session_schedule_reconnect(WebKitSession *sess)
+static void session_schedule_reconnect(WebViewSession *sess)
 {
     if (!sess || !sess->auto_reconnect)
         return;
@@ -1446,7 +1453,7 @@ static void session_schedule_reconnect(WebKitSession *sess)
     schedule_timer(5 * TICKSPERSEC, session_reconnect_timer, &sess->reconnect_timer_active);
 }
 
-static void session_reconnect(WebKitSession *sess)
+static void session_reconnect(WebViewSession *sess)
 {
     if (!sess || !sess->auto_reconnect)
         return;
@@ -1515,7 +1522,7 @@ static void session_reconnect(WebKitSession *sess)
     }
 }
 
-static void session_toggle_auto_reconnect(WebKitSession *sess)
+static void session_toggle_auto_reconnect(WebViewSession *sess)
 {
     if (!sess) return;
     sess->auto_reconnect = !sess->auto_reconnect;
@@ -1543,11 +1550,11 @@ static void session_toggle_auto_reconnect(WebKitSession *sess)
 }
 
 /* SeatVtable implementations */
-static size_t webkit_seat_output(Seat *seat, SeatOutputType type,
+static size_t webview_seat_output(Seat *seat, SeatOutputType type,
                                  const void *data, size_t len)
 {
     if (len > 0) {
-        WebKitSession *sess = session_from_seat(seat);
+        WebViewSession *sess = session_from_seat(seat);
         if (sess && data) {
             if (strstr((const char *)data, "Access denied") ||
                 strstr((const char *)data, "Authentication failed") ||
@@ -1567,17 +1574,17 @@ static size_t webkit_seat_output(Seat *seat, SeatOutputType type,
     return 0;
 }
 
-static bool webkit_seat_eof(Seat *seat)
+static bool webview_seat_eof(Seat *seat)
 {
     return false;
 }
 
-static size_t webkit_seat_banner(Seat *seat, const void *data, size_t len)
+static size_t webview_seat_banner(Seat *seat, const void *data, size_t len)
 {
-    return webkit_seat_output(seat, SEAT_OUTPUT_STDOUT, data, len);
+    return webview_seat_output(seat, SEAT_OUTPUT_STDOUT, data, len);
 }
 
-static void session_handle_prompt_input(WebKitSession *sess, const char *data, size_t len)
+static void session_handle_prompt_input(WebViewSession *sess, const char *data, size_t len)
 {
     if (!sess || !sess->cur_prompts || !data || len == 0)
         return;
@@ -1657,9 +1664,9 @@ static void session_handle_prompt_input(WebKitSession *sess, const char *data, s
     }
 }
 
-static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
+static SeatPromptResult webview_seat_get_userpass_input(Seat *seat, prompts_t *p)
 {
-    WebKitSession *sess = session_from_seat(seat);
+    WebViewSession *sess = session_from_seat(seat);
     if (!sess)
         return SPR_SW_ABORT("Session not found");
 
@@ -1711,7 +1718,7 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
     }
 
 
-    /* 4. Pop up WebKit SSH Auth modal dialog */
+    /* 4. Pop up WebView SSH Auth modal dialog */
     if (sess->hwnd) {
         sess->cur_prompts = p;
 
@@ -1775,9 +1782,9 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
     return SPR_INCOMPLETE;
 }
 
-static void webkit_seat_notify_session_started(Seat *seat)
+static void webview_seat_notify_session_started(Seat *seat)
 {
-    WebKitSession *sess = session_from_seat(seat);
+    WebViewSession *sess = session_from_seat(seat);
     if (!sess) return;
     sess->is_connected = true;
     sess->login_failed = false;
@@ -1820,23 +1827,23 @@ static void webkit_seat_notify_session_started(Seat *seat)
     }
 }
 
-static void webkit_seat_notify_remote_exit(Seat *seat)
+static void webview_seat_notify_remote_exit(Seat *seat)
 {
-    WebKitSession *sess = session_from_seat(seat);
+    WebViewSession *sess = session_from_seat(seat);
     if (!sess) return;
     session_handle_disconnect(sess, "Connection closed by remote host");
 }
 
-static void webkit_seat_notify_remote_disconnect(Seat *seat)
+static void webview_seat_notify_remote_disconnect(Seat *seat)
 {
-    WebKitSession *sess = session_from_seat(seat);
+    WebViewSession *sess = session_from_seat(seat);
     if (!sess) return;
     session_handle_disconnect(sess, "Connection disconnected");
 }
 
-static void webkit_seat_connection_fatal(Seat *seat, const char *msg)
+static void webview_seat_connection_fatal(Seat *seat, const char *msg)
 {
-    WebKitSession *sess = session_from_seat(seat);
+    WebViewSession *sess = session_from_seat(seat);
     if (!sess) return;
     char reason[512];
     snprintf(reason, sizeof(reason), "Fatal Error: %s", msg ? msg : "Connection failed");
@@ -1846,7 +1853,7 @@ static void webkit_seat_connection_fatal(Seat *seat, const char *msg)
 /* System callbacks */
 const wchar_t *get_app_user_model_id(void)
 {
-    return L"SimonTatham.PuTTYWebKit";
+    return L"SimonTatham.PuTTYWebView";
 }
 
 char *handle_restrict_acl_cmdline_prefix(char *p)
@@ -1942,7 +1949,7 @@ static void copy_to_clipboard_utf8(HWND hwnd, const char *str, int len)
 
 static void paste_to_session(HWND hwnd, int session_id)
 {
-    WebKitSession *sess = session_find(session_id);
+    WebViewSession *sess = session_find(session_id);
     if (!sess || !sess->backend || !backend_connected(sess->backend))
         return;
     if (!safe_open_clipboard(hwnd))
@@ -2012,7 +2019,7 @@ void write_aclip(HWND hwnd, int clipboard, char *data, int len)
     copy_to_clipboard_utf8(hwnd, data, len);
 }
 
-static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const char *suggested_title)
+static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const char *suggested_title)
 {
     int proto = conf_get_int(conf_to_use, CONF_protocol);
     const struct BackendVtable *vt = backend_vt_from_proto(proto);
@@ -2026,14 +2033,14 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
         return NULL;
     }
 
-    WebKitSession *sess = snew(WebKitSession);
+    WebViewSession *sess = snew(WebViewSession);
     memset(sess, 0, sizeof(*sess));
     sess->id = next_session_id++;
     sess->cfg = conf_copy(conf_to_use);
     sess->hwnd = target_hwnd;
 
     memset(&sess->wgs, 0, sizeof(sess->wgs));
-    sess->wgs.seat.vt = &webkit_seat_vt;
+    sess->wgs.seat.vt = &webview_seat_vt;
     sess->wgs.logpolicy.vt = &win_gui_logpolicy_vt;
     sess->wgs.term_hwnd = target_hwnd;
     sess->wgs.conf = sess->cfg;
@@ -2090,7 +2097,7 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
     if (!sessions_head) {
         sessions_head = sess;
     } else {
-        WebKitSession *cur = sessions_head;
+        WebViewSession *cur = sessions_head;
         while (cur->next) cur = cur->next;
         cur->next = sess;
     }
@@ -2127,10 +2134,10 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
 
 static void session_close(int id)
 {
-    WebKitSession **pp = &sessions_head;
-    WebKitSession *target = NULL;
+    WebViewSession **pp = &sessions_head;
+    WebViewSession *target = NULL;
     while (*pp) {
-        WebKitSession *s = *pp;
+        WebViewSession *s = *pp;
         if (s->id == id) {
             *pp = s->next;
             target = s;
@@ -2170,7 +2177,7 @@ static void session_close(int id)
 
             /* Check if any remaining sessions in this window */
             bool window_has_session = false;
-            for (WebKitSession *s = sessions_head; s; s = s->next) {
+            for (WebViewSession *s = sessions_head; s; s = s->next) {
                 if (s->hwnd == win_hwnd) {
                     window_has_session = true;
                     break;
@@ -2187,11 +2194,11 @@ static void session_close(int id)
     }
 }
 
-static HWND create_webkit_window(int x, int y, int width, int height)
+static HWND create_webview_window(int x, int y, int width, int height)
 {
     HWND hwnd = CreateWindowEx(
         0,
-        "PuTTYWebKitHostClass",
+        "PuTTYWebViewHostClass",
         appname,
         WS_OVERLAPPEDWINDOW,
         x, y, width, height,
@@ -2199,7 +2206,7 @@ static HWND create_webkit_window(int x, int y, int width, int height)
     );
     if (!hwnd) return NULL;
 
-    WebKitWindow *win = snew(WebKitWindow);
+    WebViewWindow *win = snew(WebViewWindow);
     win->hwnd = hwnd;
     win->next = windows_head;
     windows_head = win;
@@ -2213,12 +2220,12 @@ static HWND create_webkit_window(int x, int y, int width, int height)
 
 static void session_detach_to_new_window(int sess_id, int screen_x, int screen_y)
 {
-    WebKitSession *sess = session_find(sess_id);
+    WebViewSession *sess = session_find(sess_id);
     if (!sess) return;
     HWND old_hwnd = sess->hwnd;
 
     int remaining_in_old = 0;
-    for (WebKitSession *s = sessions_head; s; s = s->next) {
+    for (WebViewSession *s = sessions_head; s; s = s->next) {
         if (s->hwnd == old_hwnd && s->id != sess_id)
             remaining_in_old++;
     }
@@ -2228,7 +2235,7 @@ static void session_detach_to_new_window(int sess_id, int screen_x, int screen_y
     if (x < 0) x = 0;
     if (y < 0) y = 0;
 
-    HWND new_hwnd = create_webkit_window(x, y, 960, 600);
+    HWND new_hwnd = create_webview_window(x, y, 960, 600);
     if (!new_hwnd) return;
 
     /* Tell old window to remove tab */
@@ -2250,13 +2257,13 @@ static void session_detach_to_new_window(int sess_id, int screen_x, int screen_y
 
 static void session_attach_to_window(HWND target_hwnd, int sess_id)
 {
-    WebKitSession *sess = session_find(sess_id);
+    WebViewSession *sess = session_find(sess_id);
     if (!sess || !target_hwnd) return;
     HWND old_hwnd = sess->hwnd;
     if (old_hwnd == target_hwnd) return;
 
     int remaining_in_old = 0;
-    for (WebKitSession *s = sessions_head; s; s = s->next) {
+    for (WebViewSession *s = sessions_head; s; s = s->next) {
         if (s->hwnd == old_hwnd && s->id != sess_id)
             remaining_in_old++;
     }
@@ -2303,9 +2310,9 @@ static void session_attach_to_window(HWND target_hwnd, int sess_id)
 static void session_merge_all_to_window(HWND target_hwnd)
 {
     if (!target_hwnd) return;
-    WebKitSession *s = sessions_head;
+    WebViewSession *s = sessions_head;
     while (s) {
-        WebKitSession *next = s->next;
+        WebViewSession *next = s->next;
         if (s->hwnd && s->hwnd != target_hwnd) {
             session_attach_to_window(target_hwnd, s->id);
         }
@@ -2315,7 +2322,7 @@ static void session_merge_all_to_window(HWND target_hwnd)
 
 static void session_clone(HWND target_hwnd, int src_id)
 {
-    WebKitSession *src = session_find(src_id);
+    WebViewSession *src = session_find(src_id);
     if (!src || !src->cfg)
         return;
 
@@ -2340,7 +2347,7 @@ void cmdline_error(const char *fmt, ...)
     va_start(ap, fmt);
     char *msg = dupvprintf(fmt, ap);
     va_end(ap);
-    MessageBoxA(NULL, msg, "PuTTY-WebKit Command Line Error", MB_OK | MB_ICONERROR);
+    MessageBoxA(NULL, msg, "PuTTY-WebView Command Line Error", MB_OK | MB_ICONERROR);
     sfree(msg);
     exit(1);
 }
@@ -2357,7 +2364,7 @@ void modalfatalbox(const char *fmt, ...)
     if (sessions_head) {
         char banner[512];
         snprintf(banner, sizeof(banner), "\r\n\x1b[1;31m[Fatal Error: %s]\x1b[0m\r\n", msg);
-        for (WebKitSession *s = sessions_head; s; s = s->next) {
+        for (WebViewSession *s = sessions_head; s; s = s->next) {
             session_record_output(s, banner, strlen(banner));
             if (s->hwnd) {
                 webview_host_send_session_binary_to_window(s->hwnd, '0', s->id, banner, strlen(banner));
@@ -2365,7 +2372,7 @@ void modalfatalbox(const char *fmt, ...)
             }
         }
     } else {
-        MessageBoxA(NULL, msg, "PuTTY-WebKit Fatal Error", MB_ICONERROR | MB_OK);
+        MessageBoxA(NULL, msg, "PuTTY-WebView Fatal Error", MB_ICONERROR | MB_OK);
         cleanup_exit(1);
     }
     sfree(msg);
@@ -2383,7 +2390,7 @@ void nonfatal(const char *fmt, ...)
     if (sessions_head) {
         char banner[512];
         snprintf(banner, sizeof(banner), "\r\n\x1b[1;33m[Warning: %s]\x1b[0m\r\n", msg);
-        for (WebKitSession *s = sessions_head; s; s = s->next) {
+        for (WebViewSession *s = sessions_head; s; s = s->next) {
             session_record_output(s, banner, strlen(banner));
             if (s->hwnd) {
                 webview_host_send_session_binary_to_window(s->hwnd, '0', s->id, banner, strlen(banner));
@@ -2416,7 +2423,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
 
     if (type == 'R') {
         /* Web frontend ready in window `hwnd`: flush sessions hosted in `hwnd` */
-        for (WebKitSession *s = sessions_head; s; s = s->next) {
+        for (WebViewSession *s = sessions_head; s; s = s->next) {
             if (s->hwnd == hwnd) {
                 char tab_msg[256];
                 snprintf(tab_msg, sizeof(tab_msg), "T%d:%s", s->id, s->name);
@@ -2445,7 +2452,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
         if (colon) {
             int sess_id = atoi(payload);
             const char *data = colon + 1;
-            WebKitSession *sess = session_find(sess_id);
+            WebViewSession *sess = session_find(sess_id);
             if (sess) {
                 if (sess->cur_prompts) {
                     session_handle_prompt_input(sess, data, strlen(data));
@@ -2462,7 +2469,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             int cols = 80, rows = 24;
             if (sscanf(colon + 1, "{\"cols\":%d,\"rows\":%d}", &cols, &rows) == 2 ||
                 sscanf(colon + 1, "{\"columns\":%d,\"rows\":%d}", &cols, &rows) == 2) {
-                WebKitSession *sess = session_find(sess_id);
+                WebViewSession *sess = session_find(sess_id);
                 if (sess && sess->backend && backend_connected(sess->backend)) {
                     backend_size(sess->backend, cols, rows);
                 }
@@ -2477,13 +2484,13 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             fix_ssh_key_perm_via_dialog(hwnd);
         } else if (strstr(payload, ":toggle_log")) {
             int sess_id = atoi(payload);
-            WebKitSession *sess = session_find(sess_id);
+            WebViewSession *sess = session_find(sess_id);
             if (sess) {
                 session_toggle_log(sess);
             }
         } else if (strstr(payload, ":toggle_auto_reconnect")) {
             int sess_id = atoi(payload);
-            WebKitSession *sess = session_find(sess_id);
+            WebViewSession *sess = session_find(sess_id);
             if (sess) {
                 session_toggle_auto_reconnect(sess);
             }
@@ -2508,7 +2515,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             paste_to_session(hwnd, sess_id);
         } else if (strstr(payload, ":reconfig")) {
             int sess_id = atoi(payload);
-            WebKitSession *sess = session_find(sess_id);
+            WebViewSession *sess = session_find(sess_id);
             if (sess && do_reconfig(hwnd, sess->cfg, sess->backend ? backend_cfg_info(sess->backend) : 0)) {
                 int old_limit = sess->send_rate_limit;
                 int new_limit = conf_get_int(sess->cfg, CONF_send_rate_limit);
@@ -2532,12 +2539,12 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
         /* Auto-copy selected text to native clipboard */
         copy_to_clipboard_utf8(hwnd, payload, strlen(payload));
     } else if (type == 'P') {
-        /* WebKit SSH Auth response: P{sess_id}:{json} or P{sess_id}:cancel */
+        /* WebView SSH Auth response: P{sess_id}:{json} or P{sess_id}:cancel */
         const char *colon = strchr(payload, ':');
         if (colon) {
             int sess_id = atoi(payload);
             const char *action = colon + 1;
-            WebKitSession *sess = session_find(sess_id);
+            WebViewSession *sess = session_find(sess_id);
             if (sess && sess->cur_prompts) {
                 prompts_t *p = sess->cur_prompts;
                 if (!strcmp(action, "cancel")) {
@@ -2590,7 +2597,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
 }
 
 /* Window procedure */
-static LRESULT CALLBACK WebKitWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
     case WM_NETEVENT:
@@ -2610,10 +2617,10 @@ static LRESULT CALLBACK WebKitWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
     case WM_DESTROY: {
         bool is_ui_window = false;
-        WebKitWindow **wp = &windows_head;
+        WebViewWindow **wp = &windows_head;
         while (*wp) {
             if ((*wp)->hwnd == hwnd) {
-                WebKitWindow *to_free = *wp;
+                WebViewWindow *to_free = *wp;
                 *wp = (*wp)->next;
                 sfree(to_free);
                 is_ui_window = true;
@@ -2625,9 +2632,9 @@ static LRESULT CALLBACK WebKitWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         if (is_ui_window) {
             webview_host_close(hwnd);
 
-            WebKitSession *s = sessions_head;
+            WebViewSession *s = sessions_head;
             while (s) {
-                WebKitSession *next = s->next;
+                WebViewSession *next = s->next;
                 if (s->hwnd == hwnd) {
                     session_close(s->id);
                 }
@@ -2791,12 +2798,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     memset(&wc, 0, sizeof(wc));
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = WebKitWndProc;
+    wc.lpfnWndProc = WebViewWndProc;
     wc.hInstance = hinst;
     wc.hIcon = LoadIcon(hinst, MAKEINTRESOURCE(IDI_MAINICON));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = "PuTTYWebKitHostClass";
+    wc.lpszClassName = "PuTTYWebViewHostClass";
     RegisterClassEx(&wc);
 
     char title[128];
@@ -2826,20 +2833,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     }
 
     /* Ensure web assets: load existing immediately or extract if missing */
-    ensure_webkit_assets(global_html_path, MAX_PATH);
+    ensure_webview_assets(global_html_path, MAX_PATH);
 
     /* Create hidden message-only window for network socket events */
     HWND sock_hwnd = CreateWindowEx(
         0,
         wc.lpszClassName,
-        "PuTTYWebKitNetSink",
+        "PuTTYWebViewNetSink",
         0, 0, 0, 0, 0,
         HWND_MESSAGE, NULL, hinst, NULL
     );
     winselgui_set_hwnd(sock_hwnd);
 
     /* Create initial UI window */
-    HWND first_hwnd = create_webkit_window(CW_USEDEFAULT, CW_USEDEFAULT, 960, 600);
+    HWND first_hwnd = create_webview_window(CW_USEDEFAULT, CW_USEDEFAULT, 960, 600);
     if (!first_hwnd) {
         MessageBoxA(NULL, "Failed to create host window.", appname, MB_OK | MB_ICONERROR);
         cleanup_exit(1);
@@ -2862,7 +2869,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
             timeout = 0;
         } else {
             timeout = 20; /* 20ms tick guarantee to prevent any event stalling */
-            for (WebKitSession *s = sessions_head; s; s = s->next) {
+            for (WebViewSession *s = sessions_head; s; s = s->next) {
                 if (bufchain_size(&s->send_queue) > 0) {
                     timeout = 1;
                     break;
@@ -2890,7 +2897,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
                 break;
         }
 
-        for (WebKitSession *s = sessions_head; s; s = s->next) {
+        for (WebViewSession *s = sessions_head; s; s = s->next) {
             if (bufchain_size(&s->send_queue) > 0) {
                 session_send_queue_try(s);
             }
@@ -2903,7 +2910,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         run_timers(GETTICKCOUNT(), &next_timer);
 
         /* Guarantee auto-reconnect trigger and dynamic countdown */
-        for (WebKitSession *s = sessions_head; s; s = s->next) {
+        for (WebViewSession *s = sessions_head; s; s = s->next) {
             if (s->auto_reconnect && s->reconnect_timer_active) {
                 unsigned long now_tick = GETTICKCOUNT();
                 if ((long)(now_tick - s->reconnect_target_tick) >= 0) {
