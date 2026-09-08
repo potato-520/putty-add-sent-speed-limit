@@ -199,6 +199,8 @@ typedef struct WebKitSession {
     bool log_enabled;
     char log_filename[MAX_PATH];
     bool is_connected;
+    bool in_backend_free;
+    bool in_connecting;
     bool auto_reconnect;
     bool reconnect_timer_active;
     int reconnect_countdown;
@@ -844,6 +846,64 @@ static void fix_ssh_key_perm_via_dialog(HWND hwnd)
 static void session_reconnect(WebKitSession *sess);
 static void session_schedule_reconnect(WebKitSession *sess);
 
+static void session_cleanup_backend(WebKitSession *sess)
+{
+    if (!sess || !sess->backend)
+        return;
+    if (sess->in_backend_free)
+        return;
+
+    sess->in_backend_free = true;
+    Backend *be = sess->backend;
+    sess->backend = NULL;
+    sess->wgs.backend = NULL;
+    backend_free(be);
+    sess->in_backend_free = false;
+}
+
+static void session_close_backend_cb(void *vctx)
+{
+    WebKitSession *sess = (WebKitSession *)vctx;
+    session_cleanup_backend(sess);
+}
+
+static void session_handle_disconnect(WebKitSession *sess, const char *reason)
+{
+    if (!sess || sess->in_backend_free || sess->in_connecting)
+        return;
+
+    bool was_connected = sess->is_connected;
+    sess->is_connected = false;
+
+    if (sess->log_fp) {
+        fclose(sess->log_fp);
+        sess->log_fp = NULL;
+        sess->is_logging = false;
+    }
+
+    expire_timer_context(sess);
+    bufchain_clear(&sess->send_queue);
+    sess->send_timer_active = false;
+
+    if (sess->hwnd) {
+        webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
+    }
+
+    if (was_connected || !sess->reconnect_timer_active) {
+        if (reason && reason[0]) {
+            char banner[512];
+            snprintf(banner, sizeof(banner), "\r\n\x1b[1;31m[%s]\x1b[0m\r\n", reason);
+            session_write_terminal(sess, banner);
+        }
+    }
+
+    queue_toplevel_callback(session_close_backend_cb, sess);
+
+    if (sess->auto_reconnect) {
+        session_schedule_reconnect(sess);
+    }
+}
+
 static void session_reconnect_timer(void *ctx, unsigned long now)
 {
     WebKitSession *sess = container_of((bool *)ctx, WebKitSession, reconnect_timer_active);
@@ -868,15 +928,12 @@ static void session_schedule_reconnect(WebKitSession *sess)
     sess->reconnect_next_tick = now + 1 * TICKSPERSEC;
     sess->reconnect_target_tick = now + 5 * TICKSPERSEC;
 
-    session_write_terminal(sess, "\r\n\x1b[1;33m[自动重连] 5 秒后尝试重新连接...\x1b[0m");
+    session_write_terminal(sess, "\x1b[1;33m[自动重连] 5 秒后尝试重新连接...\x1b[0m");
     schedule_timer(5 * TICKSPERSEC, session_reconnect_timer, &sess->reconnect_timer_active);
 }
 
 static void session_reconnect(WebKitSession *sess)
 {
-    if (!sess) return;
-    if (sess->backend && backend_connected(sess->backend))
-    if (!sess->auto_reconnect)
     if (!sess || !sess->auto_reconnect)
         return;
     if (session_is_connected(sess))
@@ -884,11 +941,7 @@ static void session_reconnect(WebKitSession *sess)
 
     session_write_terminal(sess, "\r\x1b[2K\x1b[1;36m[自动重连] 正在尝试连接...\x1b[0m\r\n");
 
-    if (sess->backend) {
-        backend_free(sess->backend);
-        sess->backend = NULL;
-        sess->wgs.backend = NULL;
-    }
+    session_cleanup_backend(sess);
 
     bufchain_clear(&sess->send_queue);
     sess->send_timer_active = false;
@@ -899,12 +952,11 @@ static void session_reconnect(WebKitSession *sess)
     int proto = conf_get_int(sess->cfg, CONF_protocol);
     const struct BackendVtable *vt = backend_vt_from_proto(proto);
     if (!vt) {
-        session_write_terminal(sess, "\r\n\x1b[1;31m[自动重连失败: 不支持的协议]\x1b[0m\r\n");
+        session_write_terminal(sess, "\x1b[1;31m[自动重连失败: 不支持的协议]\x1b[0m\r\n");
         return;
     }
 
-    session_write_terminal(sess, "\x1b[1;36m[自动重连] 正在尝试连接...\x1b[0m\r\n");
-
+    sess->in_connecting = true;
     char *realhost = NULL;
     char *err = backend_init(vt, &sess->wgs.seat, &sess->backend, sess->logctx, sess->cfg,
                              conf_get_str(sess->cfg, CONF_host),
@@ -913,17 +965,14 @@ static void session_reconnect(WebKitSession *sess)
                              conf_get_bool(sess->cfg, CONF_tcp_nodelay),
                              conf_get_bool(sess->cfg, CONF_tcp_keepalives));
     sfree(realhost);
+    sess->in_connecting = false;
 
     if (err) {
         char banner[512];
         snprintf(banner, sizeof(banner), "\x1b[1;31m[连接失败: %s]\x1b[0m\r\n", err);
         session_write_terminal(sess, banner);
         sfree(err);
-        if (sess->backend) {
-            backend_free(sess->backend);
-            sess->backend = NULL;
-            sess->wgs.backend = NULL;
-        }
+        session_cleanup_backend(sess);
         sess->is_connected = false;
         if (sess->hwnd) {
             webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
@@ -944,9 +993,9 @@ static void session_reconnect(WebKitSession *sess)
                 snprintf(log_hint, sizeof(log_hint), "\x1b[1;36m[已自动创建新日志文件: %s]\x1b[0m\r\n", sess->log_filename);
                 session_write_terminal(sess, log_hint);
             }
-        }
-        if (sess->hwnd) {
-            webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "connected");
+            if (sess->hwnd) {
+                webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "connected");
+            }
         }
     }
 }
@@ -1015,6 +1064,8 @@ static SeatPromptResult webkit_seat_get_userpass_input(Seat *seat, prompts_t *p)
 static void webkit_seat_notify_session_started(Seat *seat)
 {
     WebKitSession *sess = session_from_seat(seat);
+    if (!sess) return;
+    sess->is_connected = true;
     if (sess->auto_reconnect) {
         session_write_terminal(sess, "\x1b[1;32m[自动重连成功]\x1b[0m\r\n");
     }
@@ -1032,81 +1083,24 @@ static void webkit_seat_notify_session_started(Seat *seat)
 static void webkit_seat_notify_remote_exit(Seat *seat)
 {
     WebKitSession *sess = session_from_seat(seat);
-    if (sess->log_fp) {
-        fclose(sess->log_fp);
-        sess->log_fp = NULL;
-        sess->is_logging = false;
-    }
-    expire_timer_context(sess);
-    bufchain_clear(&sess->send_queue);
-    sess->send_timer_active = false;
-    if (sess->backend) {
-        backend_free(sess->backend);
-        sess->backend = NULL;
-        sess->wgs.backend = NULL;
-    }
-    sess->is_connected = false;
-    if (sess->hwnd) {
-        webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
-        webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, "\r\n\x1b[31m[Connection closed by remote host]\x1b[0m\r\n", 48);
-    }
-    if (sess->auto_reconnect) {
-        session_schedule_reconnect(sess);
-    }
+    if (!sess) return;
+    session_handle_disconnect(sess, "Connection closed by remote host");
 }
 
 static void webkit_seat_notify_remote_disconnect(Seat *seat)
 {
     WebKitSession *sess = session_from_seat(seat);
-    if (sess->log_fp) {
-        fclose(sess->log_fp);
-        sess->log_fp = NULL;
-        sess->is_logging = false;
-    }
-    expire_timer_context(sess);
-    bufchain_clear(&sess->send_queue);
-    sess->send_timer_active = false;
-    if (sess->backend) {
-        backend_free(sess->backend);
-        sess->backend = NULL;
-        sess->wgs.backend = NULL;
-    }
-    sess->is_connected = false;
-    if (sess->hwnd) {
-        webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
-        webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, "\r\n\x1b[1;31m[Connection disconnected]\x1b[0m\r\n", 39);
-    }
-    if (sess->auto_reconnect) {
-        session_schedule_reconnect(sess);
-    }
+    if (!sess) return;
+    session_handle_disconnect(sess, "Connection disconnected");
 }
 
 static void webkit_seat_connection_fatal(Seat *seat, const char *msg)
 {
     WebKitSession *sess = session_from_seat(seat);
-    if (sess->log_fp) {
-        fclose(sess->log_fp);
-        sess->log_fp = NULL;
-        sess->is_logging = false;
-    }
-    expire_timer_context(sess);
-    bufchain_clear(&sess->send_queue);
-    sess->send_timer_active = false;
-    if (sess->backend) {
-        backend_free(sess->backend);
-        sess->backend = NULL;
-        sess->wgs.backend = NULL;
-    }
-    sess->is_connected = false;
-    if (sess->hwnd) {
-        webview_host_send_session_text_to_window(sess->hwnd, '2', sess->id, "disconnected");
-        char banner[512];
-        snprintf(banner, sizeof(banner), "\r\n\x1b[1;31m[Fatal Error: %s]\x1b[0m\r\n", msg ? msg : "Connection failed");
-        webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, banner, strlen(banner));
-    }
-    if (sess->auto_reconnect) {
-        session_schedule_reconnect(sess);
-    }
+    if (!sess) return;
+    char reason[512];
+    snprintf(reason, sizeof(reason), "Fatal Error: %s", msg ? msg : "Connection failed");
+    session_handle_disconnect(sess, reason);
 }
 
 /* System callbacks */
@@ -1340,6 +1334,7 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
         }
     }
 
+    sess->in_connecting = true;
     char *realhost = NULL;
     char *err = backend_init(vt, &sess->wgs.seat, &sess->backend, sess->logctx, sess->cfg,
                              conf_get_str(sess->cfg, CONF_host),
@@ -1348,6 +1343,7 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
                              conf_get_bool(sess->cfg, CONF_tcp_nodelay),
                              conf_get_bool(sess->cfg, CONF_tcp_keepalives));
     sfree(realhost);
+    sess->in_connecting = false;
 
     /* Append to sessions list */
     sess->next = NULL;
@@ -1376,11 +1372,7 @@ static WebKitSession *session_create(HWND target_hwnd, Conf *conf_to_use, const 
             webview_host_send_session_text_to_window(target_hwnd, '2', sess->id, "disconnected");
         }
         sfree(err);
-        if (sess->backend) {
-            backend_free(sess->backend);
-            sess->backend = NULL;
-            sess->wgs.backend = NULL;
-        }
+        session_cleanup_backend(sess);
         sess->is_connected = false;
         if (sess->auto_reconnect) {
             session_schedule_reconnect(sess);
@@ -1419,10 +1411,8 @@ static void session_close(int id)
         target->reconnect_timer_active = false;
         bufchain_clear(&target->send_queue);
         HWND win_hwnd = target->hwnd;
-        if (target->backend) {
-            backend_free(target->backend);
-            target->backend = NULL;
-        }
+        session_cleanup_backend(target);
+        delete_callbacks_for_context(target);
         if (target->logctx) {
             log_free(target->logctx);
             target->logctx = NULL;
