@@ -2134,6 +2134,7 @@ static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const
 
 static void session_close(int id)
 {
+    dbg_log("session_close: requested to close session %d", id);
     WebViewSession **pp = &sessions_head;
     WebViewSession *target = NULL;
     while (*pp) {
@@ -2147,19 +2148,28 @@ static void session_close(int id)
     }
 
     if (target) {
+        dbg_log("session_close: closing session %d (hwnd=%p, auto_reconnect=%d)", id, (void*)target->hwnd, target->auto_reconnect);
+        target->auto_reconnect = false;
+        target->reconnect_timer_active = false;
+        expire_timer_context(&target->reconnect_timer_active);
+        expire_timer_context(target);
+        delete_callbacks_for_context(target);
+
         if (target->log_fp) {
             fclose(target->log_fp);
             target->log_fp = NULL;
         }
         target->is_logging = false;
         target->log_enabled = false;
-        expire_timer_context(target);
-        expire_timer_context(&target->reconnect_timer_active);
-        target->reconnect_timer_active = false;
         bufchain_clear(&target->send_queue);
+        target->send_timer_active = false;
+
         HWND win_hwnd = target->hwnd;
         session_cleanup_backend(target);
         delete_callbacks_for_context(target);
+        expire_timer_context(&target->reconnect_timer_active);
+        expire_timer_context(target);
+
         if (target->logctx) {
             log_free(target->logctx);
             target->logctx = NULL;
@@ -2184,12 +2194,16 @@ static void session_close(int id)
                 }
             }
             if (!window_has_session) {
+                dbg_log("session_close: no more sessions in window %p, destroying window", (void*)win_hwnd);
                 DestroyWindow(win_hwnd);
             }
         }
+    } else {
+        dbg_log("session_close: session %d not found in sessions list", id);
     }
 
     if (!sessions_head) {
+        dbg_log("session_close: all sessions closed, posting quit message");
         PostQuitMessage(0);
     }
 }
@@ -2476,6 +2490,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             }
         }
     } else if (type == '3') {
+        dbg_log("handle_webview_message type 3: hwnd=%p payload='%s'", (void*)hwnd, payload);
         if (!strcmp(payload, "new_tab")) {
             session_new_via_dialog(hwnd);
         } else if (!strcmp(payload, "strip_log_ansi")) {

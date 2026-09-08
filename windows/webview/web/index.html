@@ -188,6 +188,8 @@
       opacity: 0.6;
       transition: all 0.15s;
       margin-left: 2px;
+      cursor: pointer;
+      user-select: none;
     }
     .tab-close:hover {
       background-color: #e06c75;
@@ -1748,6 +1750,7 @@
       closeEl.className = 'tab-close';
       closeEl.textContent = '×';
       closeEl.title = 'Close Tab';
+      closeEl.setAttribute('draggable', 'false');
 
       tabEl.appendChild(dotEl);
       tabEl.appendChild(titleEl);
@@ -1871,9 +1874,25 @@
       });
 
       // Tab close click -> close session
-      closeEl.addEventListener('click', e => {
+      closeEl.addEventListener('mousedown', e => {
         e.stopPropagation();
-        sendToHost('3', `${id}:close`);
+      });
+      closeEl.addEventListener('mouseup', e => {
+        e.stopPropagation();
+      });
+      closeEl.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        requestCloseSession(id);
+      });
+
+      // Tab middle click -> close session
+      tabEl.addEventListener('auxclick', e => {
+        if (e.button === 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          requestCloseSession(id);
+        }
       });
 
       // Tab right-click -> show context menu
@@ -2027,6 +2046,12 @@
       }, 30);
 
       return sessionObj;
+    }
+
+    function requestCloseSession(id) {
+      if (!sessions[id]) return;
+      removeSessionTab(id);
+      sendToHost('3', `${id}:close`);
     }
 
     function removeSessionTab(id) {
@@ -2193,7 +2218,7 @@
           }
         }
       } else if (action === 'close') {
-        sendToHost('3', `${targetId}:close`);
+        requestCloseSession(targetId);
       }
     });
 
