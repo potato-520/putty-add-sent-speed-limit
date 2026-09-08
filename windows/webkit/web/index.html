@@ -1183,10 +1183,18 @@
 
       term.open(viewEl);
 
-      // Focus terminal on click/mousedown
-      viewEl.addEventListener('mousedown', () => {
+      // Ensure terminal gets focused on click; suppress right-click propagation to prevent duplicate pastes
+      viewEl.addEventListener('mousedown', e => {
         term.focus();
-      });
+        if (e.button === 2) {
+          // When applications enable VT mouse tracking (e.g. Copilot CLI, vim, htop),
+          // xterm.js converts right-clicks into SGR mouse sequences (\x1b[<2;...M).
+          // On Windows, ConPTY interprets that SGR right-click as a QuickEdit paste,
+          // while our contextmenu handler ALSO pastes from the clipboard, resulting in
+          // a duplicate paste. Stopping propagation here prevents xterm.js from reporting it.
+          e.stopPropagation();
+        }
+      }, true);
 
       // Keystroke input
       term.onData(data => {
@@ -1194,28 +1202,34 @@
       });
 
       // Mouse selection copy (PuTTY classic behavior: copy on mouse release)
-      viewEl.addEventListener('mouseup', () => {
+      viewEl.addEventListener('mouseup', e => {
+        if (e.button === 2) {
+          e.stopPropagation();
+          return;
+        }
         setTimeout(() => {
           const selection = term.getSelection();
           if (selection && selection.length > 0) {
             sendToHost('4', selection);
           }
         }, 10);
-      });
+      }, true);
 
       // Quick right-click paste (PuTTY classic behavior)
       viewEl.addEventListener('contextmenu', e => {
         e.preventDefault();
+        e.stopPropagation();
         sendToHost('3', `${id}:paste`);
-      });
+      }, true);
 
       // Middle-click paste
       viewEl.addEventListener('auxclick', e => {
         if (e.button === 1) {
           e.preventDefault();
+          e.stopPropagation();
           sendToHost('3', `${id}:paste`);
         }
-      });
+      }, true);
 
       // Terminal keyboard shortcuts (Shift+Insert / Ctrl+Shift+V for paste, Ctrl+Shift+C for copy)
       term.attachCustomKeyEventHandler(e => {
@@ -1322,6 +1336,41 @@
             const dir = extractDirFromOsc7(data);
             if (dir) {
               updateSessionDir(id, dir);
+            }
+            return true;
+          });
+        } catch (e) {}
+
+        // OSC 52 Clipboard support (used by Copilot CLI, tmux, vim, etc.)
+        try {
+          term.parser.registerOscHandler(52, data => {
+            if (!data) return true;
+            const parts = data.split(';');
+            let b64 = '';
+            for (let i = 1; i < parts.length; i++) {
+              const p = parts[i].trim();
+              if (p && p !== '!') {
+                b64 = p;
+                break;
+              }
+            }
+            if (!b64 && parts.length === 1 && parts[0] && parts[0] !== '?') {
+              b64 = parts[0].trim();
+            }
+            if (b64 && b64 !== '?') {
+              try {
+                const binStr = atob(b64);
+                const bytes = new Uint8Array(binStr.length);
+                for (let i = 0; i < binStr.length; i++) {
+                  bytes[i] = binStr.charCodeAt(i);
+                }
+                const text = new TextDecoder('utf-8').decode(bytes);
+                if (text && text.length > 0) {
+                  sendToHost('4', text);
+                }
+              } catch (e) {
+                console.warn('OSC 52 decode failed:', e);
+              }
             }
             return true;
           });
