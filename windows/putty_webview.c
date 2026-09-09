@@ -2921,6 +2921,34 @@ static LRESULT CALLBACK WebViewEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam,
     }
 }
 
+static void get_default_window_rect(int *out_x, int *out_y, int *out_w, int *out_h)
+{
+    RECT rcWork;
+    /* sqrt(0.60) ≈ 0.77459667: preserving screen aspect ratio yields exactly 60% screen area */
+    const double ratio = 0.77459667;
+    int work_w, work_h, work_left = 0, work_top = 0;
+
+    if (SystemParametersInfo(SPI_GETWORKAREA, 0, &rcWork, 0)) {
+        work_left = rcWork.left;
+        work_top = rcWork.top;
+        work_w = rcWork.right - rcWork.left;
+        work_h = rcWork.bottom - rcWork.top;
+    } else {
+        work_w = GetSystemMetrics(SM_CXSCREEN);
+        work_h = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    int w = (int)(work_w * ratio);
+    int h = (int)(work_h * ratio);
+    int x = work_left + (work_w - w) / 2;
+    int y = work_top + (work_h - h) / 2;
+
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = y;
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+}
+
 static HWND editor_window_open(int session_id, const char *initial_file, int initial_line)
 {
     WebViewSession *sess = session_find(session_id);
@@ -2958,12 +2986,15 @@ static HWND editor_window_open(int session_id, const char *initial_file, int ini
     snprintf(title, sizeof(title), "PuTTY Remote Editor - %s [%s]",
              sess->name, (h && *h) ? h : "Remote");
 
+    int def_x, def_y, def_w, def_h;
+    get_default_window_rect(&def_x, &def_y, &def_w, &def_h);
+
     HWND hwnd = CreateWindowEx(
         WS_EX_APPWINDOW,
         "PuTTYWebViewEditorClass",
         title,
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1024, 680,
+        def_x, def_y, def_w, def_h,
         NULL, NULL, hinst, NULL
     );
     if (!hwnd) {
@@ -3103,13 +3134,47 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
     char distro[128] = {0};
     get_session_wsl_distro(sess, distro, sizeof(distro));
 
-    bool is_mnt = (p[0] == '/' && (p[1] == 'm' || p[1] == 'M') && (p[2] == 'n' || p[2] == 'N') &&
-                   (p[3] == 't' || p[3] == 'T') && p[4] == '/' && isalpha((unsigned char)p[5]) &&
+    /* Detect whether this is a WSL session (ConPTY protocol + distro resolved) */
+    bool is_wsl_session = false;
+    if (sess && sess->cfg) {
+        int proto = conf_get_int(sess->cfg, CONF_protocol);
+        if (proto == PROT_CONPTY) {
+            /* It's a ConPTY session.  Consider it WSL if either:
+               - a distro name was resolved (from cmd line / host / registry), or
+               - the remote_cmd contains "wsl"                                */
+            const char *rcmd = conf_get_str(sess->cfg, CONF_remote_cmd);
+            const char *host  = conf_get_str(sess->cfg, CONF_host);
+            if (distro[0] ||
+                (rcmd && strstr(rcmd, "wsl")) ||
+                (host && strnicmp(host, "wsl:", 4) == 0)) {
+                is_wsl_session = true;
+            }
+        }
+    }
+
+    dbg_log("open_url_or_file: is_wsl_session=%d, distro='%s', path='%s', line=%d",
+            (int)is_wsl_session, distro, p, line);
+
+    /* ── WSL session: always hand the Linux path to WSL's code command ───── */
+    if (is_wsl_session && p[0] == '/') {
+        dbg_log("open_url_or_file: WSL session - executing 'code' inside WSL for '%s'", p);
+        if (launch_wsl_code(distro, p, line)) {
+            dbg_log("open_url_or_file: WSL code launch OK");
+            return;
+        }
+        /* launch failed – fall through to Windows path as last resort */
+        dbg_log("open_url_or_file: WSL code launch failed, falling back to Windows path");
+    }
+
+    /* ── Non-WSL: native Linux path (rare, e.g. SSH-tunnelled local) ──────── */
+    bool is_mnt = (p[0] == '/' && (p[1] == 'm' || p[1] == 'M') &&
+                   (p[2] == 'n' || p[2] == 'N') &&
+                   (p[3] == 't' || p[3] == 'T') && p[4] == '/' &&
+                   isalpha((unsigned char)p[5]) &&
                    (p[6] == '/' || p[6] == '\0'));
 
-    /* Check if it's a Linux native path like /home/..., /var/..., /etc/... */
-    if (p[0] == '/' && !is_mnt) {
-        dbg_log("open_url_or_file: native Linux path '%s', trying WSL launch with distro '%s'", p, distro);
+    if (!is_wsl_session && p[0] == '/' && !is_mnt) {
+        dbg_log("open_url_or_file: non-WSL native Linux path '%s', trying wsl.exe code", p);
         if (launch_wsl_code(distro, p, line)) {
             dbg_log("open_url_or_file: launched via wsl.exe code successfully");
             return;
@@ -3117,6 +3182,7 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
         dbg_log("open_url_or_file: launch_wsl_code failed, falling back to UNC path");
     }
 
+    /* ── Windows path fallback (non-WSL, /mnt/c/... or drive paths) ───────── */
     char win_path[MAX_PATH * 2] = {0};
     if (is_mnt) {
         char drive = (char)toupper((unsigned char)p[5]);
@@ -3125,7 +3191,7 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
     } else if (isalpha((unsigned char)p[0]) && p[1] == ':') {
         snprintf(win_path, sizeof(win_path), "%s", p);
     } else if (p[0] == '/' && p[1] != '/') {
-        /* WSL root / Linux path fallback e.g. \\wsl.localhost\<distro>\home\... */
+        /* Last-resort UNC path: \\wsl.localhost\<distro>\<path> */
         snprintf(win_path, sizeof(win_path), "\\\\wsl.localhost\\%s%s", distro, p);
     } else {
         snprintf(win_path, sizeof(win_path), "%s", p);
@@ -3150,7 +3216,7 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
         } else {
             _snwprintf(params, sizeof(params) / sizeof(wchar_t), L"-g \"%s\"", wwin_path);
         }
-        dbg_log("open_url_or_file: launching VS Code with params");
+        dbg_log("open_url_or_file: launching Windows VS Code with params");
         ShellExecuteW(hwnd, L"open", vscode_exe, params, NULL, SW_SHOWNORMAL);
     } else {
         dbg_log("open_url_or_file: launching via default ShellExecute");
@@ -3394,12 +3460,15 @@ static void session_detach_to_new_window(int sess_id, int screen_x, int screen_y
             remaining_in_old++;
     }
 
-    int x = (screen_x > 0) ? (screen_x - 100) : CW_USEDEFAULT;
-    int y = (screen_y > 0) ? (screen_y - 20) : CW_USEDEFAULT;
+    int def_x, def_y, def_w, def_h;
+    get_default_window_rect(&def_x, &def_y, &def_w, &def_h);
+
+    int x = (screen_x > 0) ? (screen_x - 100) : def_x;
+    int y = (screen_y > 0) ? (screen_y - 20) : def_y;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
 
-    HWND new_hwnd = create_webview_window(x, y, 960, 600);
+    HWND new_hwnd = create_webview_window(x, y, def_w, def_h);
     if (!new_hwnd) return;
 
     /* Tell old window to remove tab */
@@ -4053,8 +4122,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     );
     winselgui_set_hwnd(sock_hwnd);
 
-    /* Create initial UI window */
-    HWND first_hwnd = create_webview_window(CW_USEDEFAULT, CW_USEDEFAULT, 960, 600);
+    /* Create initial UI window (centered, 60% screen area, screen aspect ratio) */
+    int def_x, def_y, def_w, def_h;
+    get_default_window_rect(&def_x, &def_y, &def_w, &def_h);
+    HWND first_hwnd = create_webview_window(def_x, def_y, def_w, def_h);
     if (!first_hwnd) {
         MessageBoxA(NULL, "Failed to create host window.", appname, MB_OK | MB_ICONERROR);
         cleanup_exit(1);
