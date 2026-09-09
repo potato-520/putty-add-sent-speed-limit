@@ -2570,10 +2570,12 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
         sftp_worker_start(ed);
 
         if (ed->pending_file[0]) {
+            char esc_file[MAX_PATH * 2];
+            json_escape_string(ed->pending_file, esc_file, sizeof(esc_file));
             char open_cmd[MAX_PATH * 2 + 64];
             snprintf(open_cmd, sizeof(open_cmd),
                      "{\"cmd\":\"open_file\",\"path\":\"%s\",\"line\":%d}",
-                     ed->pending_file, ed->pending_line);
+                     esc_file, ed->pending_line);
             webview_host_send_to_window(hwnd, open_cmd);
             ed->pending_file[0] = '\0';
             ed->pending_line = 0;
@@ -2643,10 +2645,12 @@ static HWND editor_window_open(int session_id, const char *initial_file, int ini
 
         if (initial_file && *initial_file) {
             if (ed->is_ready) {
+                char esc_file[MAX_PATH * 2];
+                json_escape_string(initial_file, esc_file, sizeof(esc_file));
                 char open_cmd[MAX_PATH * 2 + 64];
                 snprintf(open_cmd, sizeof(open_cmd),
                          "{\"cmd\":\"open_file\",\"path\":\"%s\",\"line\":%d}",
-                         initial_file, initial_line);
+                         esc_file, initial_line);
                 webview_host_send_to_window(ed->hwnd, open_cmd);
             } else {
                 strncpy(ed->pending_file, initial_file, sizeof(ed->pending_file) - 1);

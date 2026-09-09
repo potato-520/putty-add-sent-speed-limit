@@ -2609,15 +2609,28 @@ static void rpc_read_file(int req_id, const char *path)
 static void rpc_write_file(int req_id, const char *path, const char *content, bool is_base64)
 {
     char *cpath = canonify(path);
-    struct sftp_request *req = fxp_open_send(cpath, SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC, NULL);
+    char *tmppath = dupprintf("%s.putty_tmp_%lu", cpath, (unsigned long)GetCurrentProcessId());
+
+    /* 1. Write to temporary file first for atomic safety */
+    struct sftp_request *req = fxp_open_send(tmppath, SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC, NULL);
     struct sftp_packet *pktin = sftp_wait_for_reply(req);
     struct fxp_handle *fh = fxp_open_recv(pktin, req);
+    bool use_tmp = true;
+
+    if (!fh) {
+        /* Fallback: write directly to cpath if temp file creation in that dir failed */
+        use_tmp = false;
+        req = fxp_open_send(cpath, SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC, NULL);
+        pktin = sftp_wait_for_reply(req);
+        fh = fxp_open_recv(pktin, req);
+    }
 
     if (!fh) {
         printf("{\"cmd\":\"sftp_write_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
                req_id, path, fxp_error());
         fflush(stdout);
         sfree(cpath);
+        sfree(tmppath);
         return;
     }
 
@@ -2656,8 +2669,37 @@ static void rpc_write_file(int req_id, const char *path, const char *content, bo
     req = fxp_close_send(fh);
     pktin = sftp_wait_for_reply(req);
     fxp_close_recv(pktin, req);
-    sfree(cpath);
     if (decoded_sb) strbuf_free(decoded_sb);
+
+    if (ok && use_tmp) {
+        /* Atomic rename tmppath -> cpath */
+        req = fxp_rename_send(tmppath, cpath);
+        pktin = sftp_wait_for_reply(req);
+        bool ren_ok = fxp_rename_recv(pktin, req);
+        if (!ren_ok) {
+            /* SFTP v3 overwrite workaround: remove target first, then rename */
+            req = fxp_remove_send(cpath);
+            pktin = sftp_wait_for_reply(req);
+            fxp_remove_recv(pktin, req);
+
+            req = fxp_rename_send(tmppath, cpath);
+            pktin = sftp_wait_for_reply(req);
+            ren_ok = fxp_rename_recv(pktin, req);
+        }
+        if (!ren_ok) {
+            req = fxp_remove_send(tmppath);
+            pktin = sftp_wait_for_reply(req);
+            fxp_remove_recv(pktin, req);
+            ok = false;
+        }
+    } else if (!ok && use_tmp) {
+        req = fxp_remove_send(tmppath);
+        pktin = sftp_wait_for_reply(req);
+        fxp_remove_recv(pktin, req);
+    }
+
+    sfree(cpath);
+    sfree(tmppath);
 
     if (ok) {
         printf("{\"cmd\":\"sftp_write_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":true}\n",

@@ -483,9 +483,7 @@
     #image-wrapper {
       display: none;
       flex: 1;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      position: relative;
       background: #141414;
       background-image: linear-gradient(45deg, #1e1e1e 25%, transparent 25%),
                         linear-gradient(-45deg, #1e1e1e 25%, transparent 25%),
@@ -493,25 +491,112 @@
                         linear-gradient(-45deg, transparent 75%, #1e1e1e 75%);
       background-size: 20px 20px;
       background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-      overflow: auto;
-      padding: 20px;
+      overflow: hidden;
+      user-select: none;
     }
 
-    #image-wrapper img {
+    #image-stage {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: grab;
+      overflow: hidden;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+
+    #image-stage.dragging {
+      cursor: grabbing;
+    }
+
+    #image-element {
       max-width: 90%;
-      max-height: 80%;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+      max-height: 85%;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
       border-radius: 4px;
+      transform-origin: center center;
+      will-change: transform;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    #image-toolbar {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(30, 30, 33, 0.92);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 4px 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      color: #ccc;
+    }
+
+    .image-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-main);
+      cursor: pointer;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+
+    .image-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--border-color);
+      color: #fff;
+    }
+
+    .image-btn:active {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    .image-divider {
+      width: 1px;
+      height: 14px;
+      background: var(--border-color);
+      margin: 0 4px;
+    }
+
+    #image-zoom-val {
+      font-size: 11.5px;
+      font-family: Consolas, monospace;
+      color: #aaa;
+      min-width: 44px;
+      text-align: center;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+
+    #image-zoom-val:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
     }
 
     #image-info {
-      margin-top: 12px;
-      color: #aaa;
-      font-size: 12px;
+      font-size: 11.5px;
+      color: #888;
       font-family: Consolas, monospace;
-      background: rgba(0, 0, 0, 0.7);
-      padding: 4px 10px;
-      border-radius: 4px;
+      white-space: nowrap;
     }
 
     /* Toast Notifications */
@@ -632,8 +717,19 @@
         </div>
 
         <div id="image-wrapper">
-          <img id="image-element" src="" alt="Preview" />
-          <div id="image-info">-- x --</div>
+          <div id="image-stage">
+            <img id="image-element" src="" alt="Preview" draggable="false" />
+          </div>
+          <div id="image-toolbar">
+            <button class="image-btn" id="btn-zoom-out" title="缩小 (Zoom Out)">−</button>
+            <span id="image-zoom-val" title="点击重置缩放">100%</span>
+            <button class="image-btn" id="btn-zoom-in" title="放大 (Zoom In)">+</button>
+            <div class="image-divider"></div>
+            <button class="image-btn" id="btn-zoom-fit" title="适应窗口 (Fit)">⛶</button>
+            <button class="image-btn" id="btn-zoom-reset" title="原始大小 1:1 (Reset)">1:1</button>
+            <div class="image-divider"></div>
+            <div id="image-info">-- × --</div>
+          </div>
         </div>
       </div>
     </div>
@@ -677,7 +773,150 @@
         }
       };
 
-      // 2. Editor Bridge & State Management
+      // 2. Image Viewer Controller (Zoom, Pan, Fit, 1:1, Reset)
+      const imageViewer = {
+        scale: 1,
+        translateX: 0,
+        translateY: 0,
+        isDragging: false,
+        startX: 0,
+        startY: 0,
+        startTranslateX: 0,
+        startTranslateY: 0,
+        naturalWidth: 0,
+        naturalHeight: 0,
+
+        init() {
+          const stage = document.getElementById('image-stage');
+          const zoomVal = document.getElementById('image-zoom-val');
+
+          // Wheel zoom
+          stage.addEventListener('wheel', e => {
+            e.preventDefault();
+            const delta = e.deltaY < 0 ? 1.15 : 0.87;
+            this.zoomAt(delta, e.clientX, e.clientY);
+          }, { passive: false });
+
+          // Mouse drag pan
+          stage.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            this.isDragging = true;
+            this.startX = e.clientX;
+            this.startY = e.clientY;
+            this.startTranslateX = this.translateX;
+            this.startTranslateY = this.translateY;
+            stage.classList.add('dragging');
+          });
+
+          window.addEventListener('mousemove', e => {
+            if (!this.isDragging) return;
+            this.translateX = this.startTranslateX + (e.clientX - this.startX);
+            this.translateY = this.startTranslateY + (e.clientY - this.startY);
+            this.applyTransform();
+          });
+
+          window.addEventListener('mouseup', () => {
+            if (this.isDragging) {
+              this.isDragging = false;
+              stage.classList.remove('dragging');
+            }
+          });
+
+          // Double click toggle zoom
+          stage.addEventListener('dblclick', e => {
+            e.preventDefault();
+            if (Math.abs(this.scale - 1) < 0.05) {
+              this.zoomAt(2.0, e.clientX, e.clientY);
+            } else {
+              this.reset();
+            }
+          });
+
+          // Toolbar buttons
+          document.getElementById('btn-zoom-in').addEventListener('click', () => {
+            this.zoomAt(1.25);
+          });
+          document.getElementById('btn-zoom-out').addEventListener('click', () => {
+            this.zoomAt(0.8);
+          });
+          document.getElementById('btn-zoom-reset').addEventListener('click', () => {
+            this.reset();
+          });
+          document.getElementById('btn-zoom-fit').addEventListener('click', () => {
+            this.fit();
+          });
+          zoomVal.addEventListener('click', () => {
+            this.reset();
+          });
+        },
+
+        reset() {
+          this.scale = 1;
+          this.translateX = 0;
+          this.translateY = 0;
+          this.applyTransform();
+        },
+
+        fit() {
+          const stage = document.getElementById('image-stage');
+          if (!stage || !this.naturalWidth || !this.naturalHeight) {
+            this.reset();
+            return;
+          }
+          const stageRect = stage.getBoundingClientRect();
+          const padW = stageRect.width * 0.9;
+          const padH = stageRect.height * 0.85;
+          const scaleW = padW / this.naturalWidth;
+          const scaleH = padH / this.naturalHeight;
+          this.scale = Math.min(scaleW, scaleH, 1.0);
+          this.translateX = 0;
+          this.translateY = 0;
+          this.applyTransform();
+        },
+
+        zoomAt(factor, clientX = null, clientY = null) {
+          const prevScale = this.scale;
+          let newScale = prevScale * factor;
+          newScale = Math.max(0.05, Math.min(30.0, newScale));
+
+          if (clientX !== null && clientY !== null) {
+            const stage = document.getElementById('image-stage');
+            const rect = stage.getBoundingClientRect();
+            const mouseX = clientX - (rect.left + rect.width / 2);
+            const mouseY = clientY - (rect.top + rect.height / 2);
+
+            const ratio = newScale / prevScale;
+            this.translateX = mouseX - (mouseX - this.translateX) * ratio;
+            this.translateY = mouseY - (mouseY - this.translateY) * ratio;
+          }
+
+          this.scale = newScale;
+          this.applyTransform();
+        },
+
+        applyTransform() {
+          const img = document.getElementById('image-element');
+          if (img) {
+            img.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
+          }
+          const zoomVal = document.getElementById('image-zoom-val');
+          if (zoomVal) {
+            zoomVal.textContent = Math.round(this.scale * 100) + '%';
+          }
+        },
+
+        updateInfo(width, height, sizeStr) {
+          this.naturalWidth = width;
+          this.naturalHeight = height;
+          const infoEl = document.getElementById('image-info');
+          if (infoEl) {
+            infoEl.textContent = `${width} × ${height} px (${sizeStr})`;
+          }
+        }
+      };
+
+      // 3. Editor Bridge & State Management
       const bridge = {
         sessionId: 0,
         sessionName: '',
@@ -719,6 +958,7 @@
         },
 
         init() {
+          imageViewer.init();
           this.initMonaco();
           this.send({ cmd: 'editor_init' });
 
@@ -763,16 +1003,26 @@
                   this.pendingOpenFile = null;
                   this.openFile(path, line);
                 } else if (this.activePath && this.tabs.has(this.activePath)) {
-                  this.switchTab(this.activePath, 1);
+                  this.switchTab(this.activePath, 0);
                 }
               }, err => {
                 console.warn('[Monaco] Load failed, falling back to textarea editor:', err);
                 this.monacoReady = false;
+                if (this.pendingOpenFile) {
+                  const { path, line } = this.pendingOpenFile;
+                  this.pendingOpenFile = null;
+                  this.openFile(path, line);
+                }
               });
             }
           } catch (e) {
             console.warn('[Monaco] Init error, using fallback:', e);
             this.monacoReady = false;
+            if (this.pendingOpenFile) {
+              const { path, line } = this.pendingOpenFile;
+              this.pendingOpenFile = null;
+              this.openFile(path, line);
+            }
           }
         },
 
@@ -1036,7 +1286,7 @@
           }
         },
 
-        async openFile(path, targetLine = 1) {
+        async openFile(path, targetLine = 0) {
           if (!path) return;
           console.log('[Editor] openFile:', path, 'line:', targetLine);
 
@@ -1150,7 +1400,7 @@
           tabBar.appendChild(tab);
         },
 
-        switchTab(path, targetLine = 1) {
+        switchTab(path, targetLine = 0) {
           const tabData = this.tabs.get(path);
           if (!tabData) return;
 
@@ -1176,7 +1426,7 @@
           const imageWrapper = document.getElementById('image-wrapper');
 
           const isImg = /\.(png|jpg|jpeg|gif|webp|svg|ico)$/i.test(path);
-          if (isImg && tabData.isBinary) {
+          if (isImg && (tabData.isBinary || path.endsWith('.svg'))) {
             monacoContainer.style.display = 'none';
             fallbackWrapper.style.display = 'none';
             imageWrapper.style.display = 'flex';
@@ -1185,9 +1435,14 @@
                          (path.endsWith('.jpg') || path.endsWith('.jpeg')) ? 'image/jpeg' :
                          path.endsWith('.gif') ? 'image/gif' :
                          path.endsWith('.svg') ? 'image/svg+xml' : 'image/png';
-            img.src = `data:${mime};base64,${tabData.content}`;
+            if (path.endsWith('.svg') && !tabData.isBinary) {
+              img.src = `data:image/svg+xml;utf8,${encodeURIComponent(tabData.content)}`;
+            } else {
+              img.src = `data:${mime};base64,${tabData.content}`;
+            }
+            imageViewer.reset();
             img.onload = () => {
-              document.getElementById('image-info').textContent = `${img.naturalWidth} × ${img.naturalHeight} px (${this.formatSize(tabData.size)})`;
+              imageViewer.updateInfo(img.naturalWidth, img.naturalHeight, this.formatSize(tabData.size));
             };
             document.getElementById('status-lang').textContent = 'Image';
           } else if (this.monacoReady && this.editor && tabData.model) {
@@ -1196,10 +1451,10 @@
             monacoContainer.style.display = 'block';
 
             this.editor.setModel(tabData.model);
-            if (tabData.viewState) {
+            if (tabData.viewState && targetLine <= 0) {
               this.editor.restoreViewState(tabData.viewState);
             }
-            if (targetLine > 1) {
+            if (targetLine > 0) {
               this.jumpToLine(targetLine);
             }
             this.editor.focus();
@@ -1213,7 +1468,7 @@
             const textarea = document.getElementById('fallback-textarea');
             textarea.value = tabData.content;
             this.updateFallbackLineNumbers();
-            if (targetLine > 1) {
+            if (targetLine > 0) {
               this.jumpToLineFallback(targetLine);
             }
             document.getElementById('status-lang').textContent = this.getLanguageName(path);
@@ -1291,7 +1546,7 @@
         },
 
         jumpToLine(line) {
-          if (this.editor) {
+          if (this.editor && line > 0) {
             this.editor.revealLineInCenter(line);
             this.editor.setPosition({ lineNumber: line, column: 1 });
             this.editor.focus();
@@ -1300,6 +1555,7 @@
         },
 
         jumpToLineFallback(line) {
+          if (line <= 0) return;
           const textarea = document.getElementById('fallback-textarea');
           const lines = textarea.value.split('\n');
           let pos = 0;
