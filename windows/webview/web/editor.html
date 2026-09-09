@@ -355,14 +355,66 @@
       font-style: normal;
     }
 
-    .tab-item.pinned .tab-pin-icon {
-      display: inline-block;
+    .tab-pin-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       font-size: 11px;
-      opacity: 0.8;
+      margin-right: 5px;
+      opacity: 0.35;
+      cursor: pointer;
+      border-radius: 3px;
+      padding: 1px 3px;
+      transition: opacity 0.15s, transform 0.15s, background-color 0.15s;
     }
 
-    .tab-pin-icon {
-      display: none;
+    .tab-item:hover .tab-pin-btn {
+      opacity: 0.75;
+    }
+
+    .tab-pin-btn:hover {
+      opacity: 1 !important;
+      background-color: rgba(255, 255, 255, 0.15);
+      transform: scale(1.2);
+    }
+
+    .tab-item.pinned .tab-pin-btn {
+      opacity: 1;
+      filter: drop-shadow(0 0 3px rgba(229, 192, 123, 0.9));
+    }
+
+    /* Tab Context Menu */
+    #tab-context-menu {
+      position: fixed;
+      z-index: 2000;
+      background: #1e1e22;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 4px 0;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+      font-size: 12px;
+      color: #ddd;
+      min-width: 140px;
+    }
+    #tab-context-menu.hidden {
+      display: none !important;
+    }
+    .ctx-item {
+      padding: 6px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.1s;
+    }
+    .ctx-item:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+    .ctx-divider {
+      height: 1px;
+      background: var(--border-color);
+      margin: 4px 0;
     }
 
     .tab-dirty-indicator {
@@ -843,6 +895,16 @@
   </div>
 
   <div id="toast">已保存</div>
+
+  <!-- Tab Right-Click Context Menu -->
+  <div id="tab-context-menu" class="hidden">
+    <div class="ctx-item" id="ctx-tab-pin">📌 固定标签页</div>
+    <div class="ctx-divider"></div>
+    <div class="ctx-item" id="ctx-tab-close">✕ 关闭</div>
+    <div class="ctx-item" id="ctx-tab-close-others">✕ 关闭其他标签页</div>
+    <div class="ctx-divider"></div>
+    <div class="ctx-item" id="ctx-tab-copy-path">📋 复制文件路径</div>
+  </div>
 
   <!-- Monaco Editor AMD Loader -->
   <script src="vs/loader.js"></script>
@@ -1453,6 +1515,11 @@
               this.openFile(fullPath);
             });
 
+            node.addEventListener('dblclick', e => {
+              e.stopPropagation();
+              this.openFile(fullPath, 0, true);
+            });
+
             parentContainer.appendChild(node);
           }
         },
@@ -1524,23 +1591,26 @@
           }
         },
 
-        async openFile(path, targetLine = 0) {
+        async openFile(path, targetLine = 0, forcePin = false) {
           if (!path) return;
           if (!this.sftpReady) {
             this.log('info', 'SFTP', `SFTP 尚未就绪，排队等待打开: ${path}`);
-            this.pendingOpenFile = { path, line: targetLine };
+            this.pendingOpenFile = { path, line: targetLine, forcePin };
             return;
           }
-          console.log('[Editor] openFile:', path, 'line:', targetLine);
+          console.log('[Editor] openFile:', path, 'line:', targetLine, 'forcePin:', forcePin);
 
           if (this.tabs.has(path)) {
+            if (forcePin) {
+              this.togglePinTab(path, true);
+            }
             this.switchTab(path, targetLine);
             return;
           }
 
-          // VS Code preview tab logic: if active tab is unpinned and not dirty, replace it!
+          // VS Code preview tab logic: if active tab is unpinned and not dirty, and not forcePin, replace it!
           let reuseTabPath = null;
-          if (this.activePath && this.tabs.has(this.activePath)) {
+          if (!forcePin && this.activePath && this.tabs.has(this.activePath)) {
             const activeTab = this.tabs.get(this.activePath);
             if (!activeTab.isPinned && !activeTab.isDirty) {
               reuseTabPath = this.activePath;
@@ -1572,9 +1642,7 @@
                   if (tabEl) {
                     tabEl.classList.toggle('dirty', tabData.isDirty);
                     if (tabData.isDirty) {
-                      tabData.isPinned = true;
-                      tabEl.classList.remove('preview');
-                      tabEl.classList.add('pinned');
+                      this.togglePinTab(path, true);
                     }
                   }
                 }
@@ -1588,7 +1656,7 @@
               content: resp.content || '',
               originalContent: resp.content || '',
               isDirty: false,
-              isPinned: false, // Default to preview tab unless pinned
+              isPinned: !!forcePin, // Pinned if forced or edited
               isBinary: !!resp.isBinary,
               size: resp.size || 0,
               viewState: null
@@ -1607,22 +1675,47 @@
           }
         },
 
+        togglePinTab(path, forceState) {
+          const tabData = this.tabs.get(path);
+          if (!tabData) return;
+          const nextPinned = (forceState !== undefined) ? !!forceState : !tabData.isPinned;
+          tabData.isPinned = nextPinned;
+
+          const tabBar = document.getElementById('tab-bar');
+          const tabEl = Array.from(tabBar.children).find(el => el.dataset.path === path);
+          if (tabEl) {
+            tabEl.classList.toggle('pinned', tabData.isPinned);
+            tabEl.classList.toggle('preview', !tabData.isPinned);
+            const pinBtn = tabEl.querySelector('.tab-pin-btn');
+            if (pinBtn) {
+              pinBtn.title = tabData.isPinned ? "取消固定标签页 (Unpin)" : "固定此标签页 (Pin)";
+            }
+          }
+          this.showToast(tabData.isPinned ? `📌 已固定标签页: ${tabData.name}` : `已取消固定: ${tabData.name}`);
+        },
+
         createTabElement(tabData) {
           const tabBar = document.getElementById('tab-bar');
           const tab = document.createElement('div');
-          tab.className = 'tab-item preview';
+          tab.className = 'tab-item ' + (tabData.isPinned ? 'pinned' : 'preview');
           tab.dataset.path = tabData.path;
           tab.title = tabData.path;
           tab.innerHTML = `
-            <span class="tab-pin-icon">📌</span>
-            <span>${tabData.name}</span>
+            <span class="tab-pin-btn" title="${tabData.isPinned ? '取消固定标签页 (Unpin)' : '固定此标签页 (Pin)'}">📌</span>
+            <span class="tab-title">${tabData.name}</span>
             <span class="tab-dirty-indicator"></span>
             <span class="tab-close-btn" title="关闭">✕</span>
           `;
 
           tab.addEventListener('click', e => {
             if (e.target.classList.contains('tab-close-btn')) {
+              e.stopPropagation();
               this.closeTab(tabData.path);
+              return;
+            }
+            if (e.target.classList.contains('tab-pin-btn')) {
+              e.stopPropagation();
+              this.togglePinTab(tabData.path);
               return;
             }
             this.switchTab(tabData.path);
@@ -1633,14 +1726,49 @@
             if (e.button === 1) this.closeTab(tabData.path);
           });
 
-          // Double click to pin tab
-          tab.addEventListener('dblclick', () => {
-            tabData.isPinned = !tabData.isPinned;
-            tab.classList.toggle('pinned', tabData.isPinned);
-            tab.classList.toggle('preview', !tabData.isPinned);
+          // Double click on tab to pin/unpin
+          tab.addEventListener('dblclick', e => {
+            if (e.target.classList.contains('tab-close-btn')) return;
+            this.togglePinTab(tabData.path);
+          });
+
+          // Right click for context menu
+          tab.addEventListener('contextmenu', e => {
+            e.preventDefault();
+            this.showTabContextMenu(e.clientX, e.clientY, tabData.path);
           });
 
           tabBar.appendChild(tab);
+        },
+
+        showTabContextMenu(x, y, path) {
+          const menu = document.getElementById('tab-context-menu');
+          if (!menu) return;
+          this.contextMenuPath = path;
+
+          const tabData = this.tabs.get(path);
+          const pinItem = document.getElementById('ctx-tab-pin');
+          if (pinItem && tabData) {
+            pinItem.textContent = tabData.isPinned ? '📌 取消固定标签页' : '📌 固定标签页';
+          }
+
+          menu.style.left = `${Math.min(x, window.innerWidth - 170)}px`;
+          menu.style.top = `${Math.min(y, window.innerHeight - 170)}px`;
+          menu.classList.remove('hidden');
+        },
+
+        hideTabContextMenu() {
+          const menu = document.getElementById('tab-context-menu');
+          if (menu) menu.classList.add('hidden');
+          this.contextMenuPath = null;
+        },
+
+        closeOtherTabs(keepPath) {
+          for (const path of Array.from(this.tabs.keys())) {
+            if (path !== keepPath) {
+              this.closeTab(path);
+            }
+          }
         },
 
         switchTab(path, targetLine = 0) {
@@ -2012,6 +2140,32 @@
           resizer.classList.remove('resizing');
           document.body.style.cursor = 'default';
         }
+      });
+
+      // Tab Context Menu Actions
+      document.getElementById('ctx-tab-pin')?.addEventListener('click', () => {
+        if (bridge.contextMenuPath) bridge.togglePinTab(bridge.contextMenuPath);
+        bridge.hideTabContextMenu();
+      });
+      document.getElementById('ctx-tab-close')?.addEventListener('click', () => {
+        if (bridge.contextMenuPath) bridge.closeTab(bridge.contextMenuPath);
+        bridge.hideTabContextMenu();
+      });
+      document.getElementById('ctx-tab-close-others')?.addEventListener('click', () => {
+        if (bridge.contextMenuPath) bridge.closeOtherTabs(bridge.contextMenuPath);
+        bridge.hideTabContextMenu();
+      });
+      document.getElementById('ctx-tab-copy-path')?.addEventListener('click', () => {
+        if (bridge.contextMenuPath) {
+          navigator.clipboard.writeText(bridge.contextMenuPath);
+          bridge.showToast('已复制路径: ' + bridge.contextMenuPath);
+        }
+        bridge.hideTabContextMenu();
+      });
+
+      window.addEventListener('click', () => bridge.hideTabContextMenu());
+      window.addEventListener('contextmenu', e => {
+        if (!e.target.closest('.tab-item')) bridge.hideTabContextMenu();
       });
 
       window.EditorBridge = bridge;
