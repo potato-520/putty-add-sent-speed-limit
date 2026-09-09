@@ -181,6 +181,10 @@
       justify-content: center;
       width: 16px;
       height: 16px;
+      border: none;
+      background: transparent;
+      outline: none;
+      padding: 0;
       border-radius: 3px;
       font-size: 14px;
       line-height: 1;
@@ -190,6 +194,7 @@
       margin-left: 2px;
       cursor: pointer;
       user-select: none;
+      box-sizing: border-box;
     }
     .tab-close:hover {
       background-color: #e06c75;
@@ -1746,11 +1751,13 @@
       titleEl.className = 'tab-title';
       titleEl.textContent = title || `Session ${id}`;
 
-      const closeEl = document.createElement('span');
+      const closeEl = document.createElement('button');
+      closeEl.type = 'button';
       closeEl.className = 'tab-close';
       closeEl.textContent = '×';
-      closeEl.title = 'Close Tab';
+      closeEl.title = '关闭标签 (Close Tab)';
       closeEl.setAttribute('draggable', 'false');
+      closeEl.setAttribute('tabindex', '-1');
 
       tabEl.appendChild(dotEl);
       tabEl.appendChild(titleEl);
@@ -1861,6 +1868,10 @@
             }
             return false;
           }
+          if (e.ctrlKey && e.shiftKey && (e.key === 'W' || e.key === 'w')) {
+            requestCloseSession(id);
+            return false;
+          }
         }
         return true;
       });
@@ -1873,12 +1884,28 @@
         }
       });
 
-      // Tab close click -> close session
+      // Close button events: disable parent dragging on hover and handle mousedown/mouseup/click
+      closeEl.addEventListener('mouseenter', () => {
+        tabEl.setAttribute('draggable', 'false');
+      });
+      closeEl.addEventListener('mouseleave', () => {
+        tabEl.setAttribute('draggable', 'true');
+      });
+
+      let closePressed = false;
       closeEl.addEventListener('mousedown', e => {
+        tabEl.setAttribute('draggable', 'false');
         e.stopPropagation();
+        if (e.button === 0) {
+          closePressed = true;
+        }
       });
       closeEl.addEventListener('mouseup', e => {
         e.stopPropagation();
+        if (closePressed && e.button === 0) {
+          closePressed = false;
+          requestCloseSession(id);
+        }
       });
       closeEl.addEventListener('click', e => {
         e.preventDefault();
@@ -1904,6 +1931,10 @@
 
       // Tab HTML5 Dragging
       tabEl.addEventListener('dragstart', e => {
+        if (e.target === closeEl || (closeEl && closeEl.contains(e.target))) {
+          e.preventDefault();
+          return false;
+        }
         dockManager.draggedSessionId = id;
         tabEl.classList.add('dragging');
         e.dataTransfer.setData('application/x-putty-tab', String(id));
@@ -2050,8 +2081,16 @@
 
     function requestCloseSession(id) {
       if (!sessions[id]) return;
-      removeSessionTab(id);
-      sendToHost('3', `${id}:close`);
+      try {
+        sendToHost('3', `${id}:close`);
+      } catch (e) {
+        console.error('sendToHost close failed:', e);
+      }
+      try {
+        removeSessionTab(id);
+      } catch (e) {
+        console.error('removeSessionTab failed:', e);
+      }
     }
 
     function removeSessionTab(id) {

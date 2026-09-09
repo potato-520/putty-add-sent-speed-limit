@@ -2161,6 +2161,9 @@ static void session_close(int id)
         }
         target->is_logging = false;
         target->log_enabled = false;
+        expire_timer_context(target);
+        expire_timer_context(&target->reconnect_timer_active);
+        target->reconnect_timer_active = false;
         bufchain_clear(&target->send_queue);
         target->send_timer_active = false;
 
