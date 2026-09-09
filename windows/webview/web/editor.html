@@ -140,6 +140,49 @@
       display: flex;
       flex-direction: column;
       flex-shrink: 0;
+      transition: width 0.18s ease, min-width 0.18s ease;
+      overflow: hidden;
+    }
+
+    #sidebar.collapsed {
+      width: 0 !important;
+      min-width: 0 !important;
+      border-right: none;
+    }
+
+    #sidebar-resizer.collapsed {
+      display: none;
+    }
+
+    /* Sidebar toggle button – sits on the left edge of the tab-bar */
+    #btn-sidebar-toggle {
+      width: 26px;
+      height: 34px;
+      flex-shrink: 0;
+      background: var(--bg-tab-bar);
+      border: none;
+      border-right: 1px solid var(--border-color);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+    }
+    #btn-sidebar-toggle:hover {
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+    }
+
+    /* Active file highlight in tree */
+    .tree-node.tree-active-file {
+      background-color: rgba(0, 122, 204, 0.35) !important;
+      color: #fff;
+      outline: 1px solid rgba(0, 122, 204, 0.6);
+      outline-offset: -1px;
+      border-radius: 2px;
     }
 
     .sidebar-header {
@@ -1069,6 +1112,7 @@
     <div id="editor-container">
       <!-- Tabs -->
       <div id="tab-bar">
+        <button id="btn-sidebar-toggle" title="隐藏/展开侧边栏 (Ctrl+B)">◀</button>
         <!-- Tab items injected here -->
       </div>
 
@@ -2263,6 +2307,66 @@
           }
 
           document.getElementById('status-path').textContent = path;
+
+          // Auto-locate & highlight the active file in the sidebar tree
+          this.highlightActiveFileInTree(path);
+        },
+
+        /* ── Sidebar collapse / expand ─────────────────────────────── */
+        toggleSidebar() {
+          const sidebar  = document.getElementById('sidebar');
+          const resizer  = document.getElementById('sidebar-resizer');
+          const btn      = document.getElementById('btn-sidebar-toggle');
+          const collapsed = sidebar.classList.toggle('collapsed');
+          resizer.classList.toggle('collapsed', collapsed);
+          btn.textContent = collapsed ? '▶' : '◀';
+          btn.title       = collapsed ? '展开侧边栏 (Ctrl+B)' : '隐藏侧边栏 (Ctrl+B)';
+          // Monaco needs a layout refresh when the container size changes
+          if (this.editor) {
+            setTimeout(() => this.editor.layout(), 200);
+          }
+        },
+
+        /* ── Auto-locate current file in sidebar tree ───────────────── */
+        highlightActiveFileInTree(path) {
+          if (!path) return;
+          const fileDir  = path.substring(0, path.lastIndexOf('/')) || '/';
+          const fileName = path.substring(path.lastIndexOf('/') + 1);
+
+          // helper: find and highlight a tree-node whose title == path
+          const tryHighlight = () => {
+            // Clear previous highlight
+            document.querySelectorAll('.tree-node.tree-active-file')
+              .forEach(el => el.classList.remove('tree-active-file'));
+
+            // Look for a file node whose full-path title matches
+            const allNodes = document.querySelectorAll('#file-tree-container .tree-node');
+            let found = null;
+            for (const node of allNodes) {
+              const titleEl = node.querySelector('[title]');
+              const title   = titleEl ? titleEl.getAttribute('title') : '';
+              if (title === path) { found = node; break; }
+            }
+            if (found) {
+              found.classList.add('tree-active-file');
+              found.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+              return true;
+            }
+            return false;
+          };
+
+          // If the sidebar already shows the directory containing this file,
+          // just try to highlight directly.
+          if (this.currentDir === fileDir) {
+            tryHighlight();
+            return;
+          }
+
+          // Otherwise navigate to the file's parent directory first, then highlight
+          this.loadDirectory(fileDir).then(() => {
+            // Give the DOM a tick to render
+            setTimeout(() => tryHighlight(), 80);
+          }).catch(() => {});
         },
 
         closeTab(path, silent = false) {
@@ -2529,6 +2633,10 @@
         }
       });
 
+      document.getElementById('btn-sidebar-toggle')?.addEventListener('click', () => {
+        bridge.toggleSidebar();
+      });
+
       window.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
           e.preventDefault();
@@ -2536,6 +2644,9 @@
         } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
           e.preventDefault();
           bridge.toggleMarkdownPreview();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+          e.preventDefault();
+          bridge.toggleSidebar();
         }
       });
 
