@@ -826,6 +826,12 @@
     <div class="menu-item" data-action="open-mle">
       <span>📝</span> 多行文本编辑器 (Ctrl+单击终端)
     </div>
+    <div class="menu-item" data-action="toggle-crlf">
+      <span id="ctx-crlf-icon">↵</span> <span id="ctx-crlf-text">换行回车 (Implicit CR in LF)</span>
+    </div>
+    <div class="menu-item" data-action="reconfig">
+      <span>⚙️</span> 会话配置 (Change Settings...)
+    </div>
     <div class="menu-divider"></div>
     <div class="menu-item" data-action="clone">
       <span>📑</span> 克隆当前会话 (Clone Session)
@@ -1872,6 +1878,10 @@
       viewEl.className = 'term-view';
       viewEl.id = `term-view-${id}`;
 
+      const isSerialTitle = /\b(COM\d+|Serial)\b/i.test(title);
+      const initialConvertEol = (sessions[id]?.config?.lfhascr !== undefined) ?
+                                !!sessions[id].config.lfhascr : isSerialTitle;
+
       // 3. xterm.js setup
       const term = new Terminal({
         theme: termTheme,
@@ -1881,7 +1891,8 @@
         cursorBlink: true,
         cursorStyle: 'block',
         allowProposedApi: true,
-        scrollback: 10000,
+        scrollback: sessions[id]?.config?.scrollback || 10000,
+        convertEol: initialConvertEol,
         linkHandler: {
           allowNonHttpProtocols: true,
           activate: (e, text, range) => {
@@ -1956,6 +1967,9 @@
       // Keystroke input
       term.onData(data => {
         sendToHost('0', `${id}:${data}`);
+        if (sessions[id]?.config?.localEcho === 1) { // 1 = FORCE_ON
+          term.write(data);
+        }
       });
 
       // Mouse selection copy (PuTTY classic behavior: copy on mouse release)
@@ -2112,6 +2126,7 @@
         id,
         baseTitle: title || `Session ${id}`,
         title: title || `Session ${id}`,
+        config: sessions[id]?.config || {},
         currentDir: null,
         term,
         fitAddon,
@@ -2351,6 +2366,13 @@
           logIcon.innerHTML = '▶';
         }
       }
+      const crlfText = document.getElementById('ctx-crlf-text');
+      const crlfIcon = document.getElementById('ctx-crlf-icon');
+      if (crlfText && crlfIcon) {
+        const isConvertEol = s?.term?.options?.convertEol;
+        crlfText.textContent = isConvertEol ? '换行补回车 (LF->CRLF: 开启)' : '换行补回车 (LF->CRLF: 关闭)';
+        crlfIcon.textContent = isConvertEol ? '✓' : '↵';
+      }
       contextMenuEl.style.display = 'block';
     }
 
@@ -2399,6 +2421,16 @@
 
       if (action === 'toggle-log') {
         sendToHost('3', `${targetId}:toggle_log`);
+      } else if (action === 'toggle-crlf') {
+        const sess = sessions[targetId];
+        if (sess && sess.term) {
+          const nextVal = !sess.term.options.convertEol;
+          sess.term.options.convertEol = nextVal;
+          if (sess.config) sess.config.lfhascr = nextVal;
+          sendToHost('3', `${targetId}:toggle_crlf`);
+        }
+      } else if (action === 'reconfig') {
+        sendToHost('3', `${targetId}:reconfig`);
       } else if (action === 'open-editor') {
         sendToHost('3', `${targetId}:open_editor`);
       } else if (action === 'open-mle') {
@@ -2561,6 +2593,31 @@
               openSshAuthModal(id, data);
             } catch (e) {
               console.error('Failed to parse SSH auth payload:', e);
+            }
+          }
+        } else if (type === 'C') {
+          // Terminal Configuration: C{id}:{json}
+          const colon = payload.indexOf(':');
+          if (colon !== -1) {
+            const id = parseInt(payload.slice(0, colon), 10);
+            const jsonStr = payload.slice(colon + 1);
+            try {
+              const cfg = JSON.parse(jsonStr);
+              if (!sessions[id]) {
+                sessions[id] = { config: cfg };
+              } else {
+                sessions[id].config = Object.assign(sessions[id].config || {}, cfg);
+                if (sessions[id].term) {
+                  if (cfg.lfhascr !== undefined) {
+                    sessions[id].term.options.convertEol = !!cfg.lfhascr;
+                  }
+                  if (cfg.scrollback !== undefined && cfg.scrollback > 0) {
+                    sessions[id].term.options.scrollback = cfg.scrollback;
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('Failed to parse config payload:', e);
             }
           }
         }

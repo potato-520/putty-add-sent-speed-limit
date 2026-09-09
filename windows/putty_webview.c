@@ -420,6 +420,15 @@ typedef struct WebViewSession {
     unsigned long reconnect_next_tick;
     unsigned long reconnect_target_tick;
 
+    /* Terminal & serial emulation configuration */
+    int protocol;
+    bool lfhascr;
+    bool crhaslf;
+    bool wrap_mode;
+    int localecho;
+    int localedit;
+    char last_out_char;
+
     /* SSH Interactive prompt state & password vault context */
     prompts_t *cur_prompts;
     size_t cur_prompt_idx;
@@ -1852,13 +1861,68 @@ static size_t webview_seat_output(Seat *seat, SeatOutputType type,
                 sess->login_failed = true;
             }
         }
-        session_record_output(sess, data, len);
-        if (sess->log_fp) {
-            fwrite(data, 1, len, sess->log_fp);
+
+        const char *src = (const char *)data;
+        const char *out_data = src;
+        size_t out_len = len;
+        char stack_buf[4096];
+        char *heap_buf = NULL;
+
+        if (sess && (sess->lfhascr || sess->crhaslf)) {
+            bool need_conv = false;
+            for (size_t i = 0; i < len; i++) {
+                if ((sess->lfhascr && src[i] == '\n') ||
+                    (sess->crhaslf && src[i] == '\r')) {
+                    need_conv = true;
+                    break;
+                }
+            }
+            if (need_conv) {
+                if (len * 2 <= sizeof(stack_buf)) {
+                    out_data = stack_buf;
+                } else {
+                    heap_buf = snewn(len * 2, char);
+                    out_data = heap_buf;
+                }
+                char *dst = (char *)out_data;
+                size_t wr = 0;
+                for (size_t i = 0; i < len; i++) {
+                    char c = src[i];
+                    if (sess->lfhascr && c == '\n') {
+                        if (sess->last_out_char != '\r') {
+                            dst[wr++] = '\r';
+                        }
+                        dst[wr++] = '\n';
+                        sess->last_out_char = '\n';
+                    } else if (sess->crhaslf && c == '\r') {
+                        dst[wr++] = '\r';
+                        if (i + 1 < len && src[i + 1] == '\n') {
+                            /* Next is already \n, let loop process it */
+                        } else {
+                            dst[wr++] = '\n';
+                        }
+                        sess->last_out_char = '\r';
+                    } else {
+                        dst[wr++] = c;
+                        sess->last_out_char = c;
+                    }
+                }
+                out_len = wr;
+            } else if (len > 0) {
+                sess->last_out_char = src[len - 1];
+            }
+        }
+
+        session_record_output(sess, out_data, out_len);
+        if (sess && sess->log_fp) {
+            fwrite(out_data, 1, out_len, sess->log_fp);
             fflush(sess->log_fp);
         }
-        if (sess->hwnd) {
-            webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, data, len);
+        if (sess && sess->hwnd) {
+            webview_host_send_session_binary_to_window(sess->hwnd, '0', sess->id, out_data, out_len);
+        }
+        if (heap_buf) {
+            sfree(heap_buf);
         }
     }
     return 0;
@@ -3591,6 +3655,23 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
 }
 
 
+static void session_send_config_to_window(WebViewSession *sess, HWND target_hwnd)
+{
+    if (!sess || !target_hwnd) return;
+    char conf_msg[512];
+    snprintf(conf_msg, sizeof(conf_msg),
+             "C%d:{\"lfhascr\":%s,\"crhaslf\":%s,\"wrapMode\":%s,\"protocol\":%d,\"localEcho\":%d,\"localEdit\":%d,\"scrollback\":%d}",
+             sess->id,
+             sess->lfhascr ? "true" : "false",
+             sess->crhaslf ? "true" : "false",
+             sess->wrap_mode ? "true" : "false",
+             sess->protocol,
+             sess->localecho,
+             sess->localedit,
+             conf_get_int(sess->cfg, CONF_savelines));
+    webview_host_send_to_window(target_hwnd, conf_msg);
+}
+
 static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const char *suggested_title)
 {
     int proto = conf_get_int(conf_to_use, CONF_protocol);
@@ -3632,6 +3713,17 @@ static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const
         sess->send_rate_limit = 0;
     sess->send_next_tick = 0;
     sess->send_timer_active = false;
+
+    /* Load Terminal Emulation Settings from Conf */
+    sess->protocol = proto;
+    sess->lfhascr = conf_get_bool(sess->cfg, CONF_lfhascr);
+    sess->crhaslf = conf_get_bool(sess->cfg, CONF_crhaslf);
+    sess->wrap_mode = conf_get_bool(sess->cfg, CONF_wrap_mode);
+    sess->localecho = conf_get_int(sess->cfg, CONF_localecho);
+    sess->localedit = conf_get_int(sess->cfg, CONF_localedit);
+    sess->last_out_char = 0;
+    dbg_log("session_create: session %d proto=%d lfhascr=%d crhaslf=%d wrap=%d echo=%d edit=%d",
+            sess->id, proto, sess->lfhascr, sess->crhaslf, sess->wrap_mode, sess->localecho, sess->localedit);
 
     if (suggested_title && *suggested_title) {
         strncpy(sess->name, suggested_title, sizeof(sess->name) - 1);
@@ -3684,6 +3776,7 @@ static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const
         char tab_msg[256];
         snprintf(tab_msg, sizeof(tab_msg), "T%d:%s", sess->id, sess->name);
         webview_host_send_to_window(target_hwnd, tab_msg);
+        session_send_config_to_window(sess, target_hwnd);
     }
 
     if (err) {
@@ -3881,6 +3974,7 @@ static void session_attach_to_window(HWND target_hwnd, int sess_id)
     char tab_msg[256];
     snprintf(tab_msg, sizeof(tab_msg), "T%d:%s", sess->id, sess->name);
     webview_host_send_to_window(target_hwnd, tab_msg);
+    session_send_config_to_window(sess, target_hwnd);
     webview_host_send_session_text_to_window(target_hwnd, '2', sess->id,
         session_is_connected(sess) ? "connected" : "disconnected");
 
@@ -4041,6 +4135,7 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                 char tab_msg[256];
                 snprintf(tab_msg, sizeof(tab_msg), "T%d:%s", s->id, s->name);
                 webview_host_send_to_window(hwnd, tab_msg);
+                session_send_config_to_window(s, hwnd);
                 webview_host_send_session_text_to_window(hwnd, '2', s->id,
                     session_is_connected(s) ? "connected" : "disconnected");
                 char log_msg[MAX_PATH + 32];
@@ -4155,9 +4250,26 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                         sess->send_next_tick = 0;
                     session_send_queue_try(sess);
                 }
+                sess->lfhascr = conf_get_bool(sess->cfg, CONF_lfhascr);
+                sess->crhaslf = conf_get_bool(sess->cfg, CONF_crhaslf);
+                sess->wrap_mode = conf_get_bool(sess->cfg, CONF_wrap_mode);
+                sess->localecho = conf_get_int(sess->cfg, CONF_localecho);
+                sess->localedit = conf_get_int(sess->cfg, CONF_localedit);
+                session_send_config_to_window(sess, hwnd);
+                dbg_log("do_reconfig updated: sess=%d, lfhascr=%d, crhaslf=%d, wrap=%d, echo=%d, edit=%d",
+                        sess->id, sess->lfhascr, sess->crhaslf, sess->wrap_mode, sess->localecho, sess->localedit);
                 if (sess->backend) {
                     backend_reconfig(sess->backend, sess->cfg);
                 }
+            }
+        } else if (strstr(payload, ":toggle_crlf")) {
+            int sess_id = atoi(payload);
+            WebViewSession *sess = session_find(sess_id);
+            if (sess) {
+                sess->lfhascr = !sess->lfhascr;
+                conf_set_bool(sess->cfg, CONF_lfhascr, sess->lfhascr);
+                session_send_config_to_window(sess, hwnd);
+                dbg_log("Toggled lfhascr for session %d to %d", sess->id, sess->lfhascr);
             }
         }
     } else if (type == '4') {
