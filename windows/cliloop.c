@@ -30,10 +30,19 @@ static bool callback_is_for_socket(
     return true;
 }
 
+#if defined(_MSC_VER)
+#pragma comment(linker, "/alternatename:done_with_socket=cliloop_done_with_socket")
+void cliloop_done_with_socket(SOCKET skt)
+{
+    delete_callbacks(callback_is_for_socket, (void *)(uintptr_t)skt);
+}
+#else
+__attribute__((weak))
 void done_with_socket(SOCKET skt)
 {
     delete_callbacks(callback_is_for_socket, (void *)(uintptr_t)skt);
 }
+#endif
 
 void cli_main_loop(cliloop_pre_t pre, cliloop_post_t post, void *ctx)
 {

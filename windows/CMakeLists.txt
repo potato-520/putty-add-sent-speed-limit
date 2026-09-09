@@ -229,10 +229,13 @@ add_executable(putty_webview
   conpty.c
   webview/webview_host.cpp
   help.c
-  ${CMAKE_SOURCE_DIR}/stubs/no-console.c
+  ${CMAKE_SOURCE_DIR}/psftp.c
+  sftp_worker_glue.c
   putty_webview.rc)
 be_list(putty_webview PuTTY_WebView SSH SERIAL OTHERBACKENDS CONPTY)
-add_dependencies(putty_webview generated_licence_h psftp plink)
+add_dependencies(putty_webview generated_licence_h)
+
+target_compile_definitions(putty_webview PRIVATE PUTTY_WEBVIEW_EMBEDDED_SFTP)
 
 target_include_directories(putty_webview PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/include
@@ -247,6 +250,7 @@ endif()
 target_link_libraries(putty_webview
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/lib/x64/WebView2LoaderStatic.lib
   miniz
+  sftpclient
   version
   crypt32
   guiterminal guimisc eventloop sshclient otherbackends settings network crypto
@@ -259,18 +263,6 @@ add_custom_command(TARGET putty_webview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_CURRENT_SOURCE_DIR}/webview/web
     $<TARGET_FILE_DIR:putty_webview>/webview/web
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_FILE:psftp>
-    ${CMAKE_CURRENT_SOURCE_DIR}/webview/bin/psftp.exe
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_FILE:plink>
-    ${CMAKE_CURRENT_SOURCE_DIR}/webview/bin/plink.exe
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_FILE:psftp>
-    $<TARGET_FILE_DIR:putty_webview>/webview/psftp.exe
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_FILE:plink>
-    $<TARGET_FILE_DIR:putty_webview>/webview/plink.exe
 )
 
 add_custom_target(putty_webkit DEPENDS putty_webview)

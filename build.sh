@@ -30,7 +30,6 @@ fi
 if [[ " ${targets[*]} " =~ " putty_webview " || " ${targets[*]} " =~ " putty_webkit " ]]; then
     python3 "$script_dir/windows/webview/pack_assets.py" \
         "$script_dir/windows/webview/web" \
-        "$script_dir/windows/webview/bin" \
         "$script_dir/windows/webview/webview_assets.zip"
 fi
 

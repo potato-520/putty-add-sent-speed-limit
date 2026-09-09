@@ -2891,8 +2891,10 @@ int do_sftp(int mode, int modeflags, Filename *batchfile)
 
 static bool verbose = false;
 
+#ifndef PUTTY_WEBVIEW_EMBEDDED_SFTP
 void ldisc_echoedit_update(Ldisc *ldisc) { }
 void ldisc_check_sendok(Ldisc *ldisc) { }
+#endif
 
 /*
  * Receive a block of data from the SSH link. Block until all data
@@ -3211,6 +3213,7 @@ static int psftp_connect(char *userhost, char *user, int portnumber)
     return 0;
 }
 
+#ifndef PUTTY_WEBVIEW_EMBEDDED_SFTP
 void cmdline_error(const char *p, ...)
 {
     va_list ap;
@@ -3224,11 +3227,14 @@ void cmdline_error(const char *p, ...)
 
 const bool share_can_be_downstream = true;
 const bool share_can_be_upstream = false;
+#endif
 
 static stdio_sink stderr_ss;
 static StripCtrlChars *stderr_scc;
 
+#ifndef PUTTY_WEBVIEW_EMBEDDED_SFTP
 const unsigned cmdline_tooltype = TOOLTYPE_FILETRANSFER;
+#endif
 
 /*
  * Main program. Parse arguments etc.
@@ -3257,6 +3263,10 @@ int psftp_main(CmdlineArgList *arglist)
         CmdlineArg *arg = arglist->args[arglistpos++];
         CmdlineArg *nextarg = arglist->args[arglistpos];
         const char *argstr = cmdline_arg_to_str(arg);
+
+        if (strcmp(argstr, "--psftp") == 0 || strcmp(argstr, "--sftp-worker") == 0) {
+            continue;
+        }
 
         if (argstr[0] != '-') {
             if (userhost)

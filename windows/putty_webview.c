@@ -21,18 +21,24 @@
 #include <aclapi.h>
 #include <sddl.h>
 #include <wincrypt.h>
+#include <fcntl.h>
+#include <io.h>
 #pragma comment(lib, "crypt32.lib")
 #include "webview/webview_host.h"
 
 /* appname is generated in be_list.c by be_list() macro */
 
 const unsigned cmdline_tooltype =
+    TOOLTYPE_FILETRANSFER |
     TOOLTYPE_HOST_ARG |
     TOOLTYPE_PORT_ARG |
     TOOLTYPE_NO_VERBOSE_OPTION;
 
 const bool share_can_be_downstream = true;
 const bool share_can_be_upstream = true;
+
+static bool is_sftp_worker = false;
+extern int psftp_main(CmdlineArgList *arglist);
 
 HINSTANCE hinst;
 
@@ -147,8 +153,6 @@ static void mem_log_dump_to_strbuf(strbuf *sb)
 #define IDR_WEB_FIT_ADDON_JS        2004
 #define IDR_WEB_WEBLINKS_ADDON_JS   2005
 #define IDR_WEB_EDITOR_HTML         2006
-#define IDR_BIN_PSFTP               2007
-#define IDR_BIN_PLINK               2008
 
 struct EmbeddedAsset {
     const wchar_t *filename;
@@ -165,11 +169,6 @@ static const struct EmbeddedAsset embedded_assets[] = {
 };
 #define NUM_EMBEDDED_ASSETS (sizeof(embedded_assets) / sizeof(embedded_assets[0]))
 
-static const struct EmbeddedAsset embedded_binaries[] = {
-    { L"psftp.exe", IDR_BIN_PSFTP },
-    { L"plink.exe", IDR_BIN_PLINK },
-};
-#define NUM_EMBEDDED_BINARIES (sizeof(embedded_binaries) / sizeof(embedded_binaries[0]))
 
 static bool extract_resource_to_file(int res_id, const wchar_t *filepath)
 {
@@ -383,34 +382,6 @@ static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_pa
         if (needs_update) {
             dbg_log("Asset sync: extracting %ls (%u bytes)", embedded_assets[i].filename, res_size);
             extract_resource_to_file(embedded_assets[i].res_id, filepath);
-        }
-    }
-
-    for (size_t i = 0; i < NUM_EMBEDDED_BINARIES; i++) {
-        HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_binaries[i].res_id), MAKEINTRESOURCEW(10));
-        if (!hrsrc) continue;
-        DWORD res_size = SizeofResource(hinst, hrsrc);
-        if (res_size == 0) continue;
-
-        wchar_t filepath[MAX_PATH];
-        _snwprintf(filepath, MAX_PATH, L"%s\\%s", target_webview_root, embedded_binaries[i].filename);
-
-        bool needs_update = false;
-        HANDLE hf = CreateFileW(filepath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hf == INVALID_HANDLE_VALUE) {
-            needs_update = true;
-        } else {
-            LARGE_INTEGER fsize;
-            if (!GetFileSizeEx(hf, &fsize) || (DWORD)fsize.QuadPart != res_size) {
-                needs_update = true;
-            }
-            CloseHandle(hf);
-        }
-
-        if (needs_update) {
-            dbg_log("Binary sync: extracting companion %ls to webview/ (%u bytes)", embedded_binaries[i].filename, res_size);
-            extract_resource_to_file(embedded_binaries[i].res_id, filepath);
         }
     }
 }
@@ -2761,31 +2732,14 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
         return false;
     }
 
-    char exe_dir[MAX_PATH];
-    GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
-    char *slash = strrchr(exe_dir, '\\');
-    if (slash) *(slash + 1) = '\0';
-    else exe_dir[0] = '\0';
-
-    char psftp_path[MAX_PATH];
-    /* 1. First check in webview\psftp.exe (where embedded companion binary is extracted) */
-    snprintf(psftp_path, sizeof(psftp_path), "%swebview\\psftp.exe", exe_dir);
-    if (GetFileAttributesA(psftp_path) == INVALID_FILE_ATTRIBUTES) {
-        /* 2. Check in same directory as exe */
-        snprintf(psftp_path, sizeof(psftp_path), "%spsftp.exe", exe_dir);
-    }
-    if (GetFileAttributesA(psftp_path) == INVALID_FILE_ATTRIBUTES) {
-        /* 3. Check system PATH */
-        if (SearchPathA(NULL, "psftp.exe", NULL, sizeof(psftp_path), psftp_path, NULL) == 0) {
-            dbg_log("sftp_worker_start: psftp.exe not found at '%s'", psftp_path);
-            char esc_path[MAX_PATH * 2];
-            json_escape_string(psftp_path, esc_path, sizeof(esc_path));
-            char err_msg[1024];
-            snprintf(err_msg, sizeof(err_msg),
-                     "{\"cmd\":\"sftp_error\",\"error\":\"未找到 psftp.exe: %s\"}", esc_path);
-            webview_host_send_to_window(ed->hwnd, err_msg);
-            return false;
-        }
+    char self_path[MAX_PATH];
+    if (GetModuleFileNameA(NULL, self_path, sizeof(self_path)) == 0) {
+        dbg_log("sftp_worker_start: GetModuleFileNameA failed %lu", GetLastError());
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg),
+                 "{\"cmd\":\"sftp_error\",\"error\":\"获取自身程序路径失败 (Error %lu)\"}", GetLastError());
+        webview_host_send_to_window(ed->hwnd, err_msg);
+        return false;
     }
 
     const char *host = conf_get_str(sess->cfg, CONF_host);
@@ -2863,7 +2817,7 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     const char *keyfile = keyfn ? filename_to_str(keyfn) : "";
 
     char cmdline[2048];
-    int len = snprintf(cmdline, sizeof(cmdline), "\"%s\" -rpc -batch -share", psftp_path);
+    int len = snprintf(cmdline, sizeof(cmdline), "\"%s\" --psftp -rpc -batch -share", self_path);
 
     if (port > 0 && port != 22) {
         len += snprintf(cmdline + len, sizeof(cmdline) - len, " -P %d", port);
@@ -2970,7 +2924,7 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
         ed->h_stdout_read = NULL;
         char err_msg[256];
         snprintf(err_msg, sizeof(err_msg),
-                 "{\"cmd\":\"sftp_error\",\"error\":\"启动 psftp.exe 失败 (Error %lu)\"}", GetLastError());
+                 "{\"cmd\":\"sftp_error\",\"error\":\"启动 SFTP 子进程失败 (Error %lu)\"}", GetLastError());
         webview_host_send_to_window(ed->hwnd, err_msg);
         return false;
     }
@@ -3777,7 +3731,11 @@ void cmdline_error(const char *fmt, ...)
     va_start(ap, fmt);
     char *msg = dupvprintf(fmt, ap);
     va_end(ap);
-    MessageBoxA(NULL, msg, "PuTTY-WebView Command Line Error", MB_OK | MB_ICONERROR);
+    if (is_sftp_worker) {
+        fprintf(stderr, "psftp: %s\n", msg);
+    } else {
+        MessageBoxA(NULL, msg, "PuTTY-WebView Command Line Error", MB_OK | MB_ICONERROR);
+    }
     sfree(msg);
     exit(1);
 }
@@ -3790,6 +3748,11 @@ void modalfatalbox(const char *fmt, ...)
     va_end(ap);
 
     dbg_log("modalfatalbox: %s", msg);
+
+    if (is_sftp_worker) {
+        fprintf(stderr, "Fatal Error: %s\n", msg);
+        cleanup_exit(1);
+    }
 
     if (sessions_head) {
         char banner[512];
@@ -3816,6 +3779,12 @@ void nonfatal(const char *fmt, ...)
     va_end(ap);
 
     dbg_log("nonfatal: %s", msg);
+
+    if (is_sftp_worker) {
+        fprintf(stderr, "Error: %s\n", msg);
+        sfree(msg);
+        return;
+    }
 
     if (sessions_head) {
         char banner[512];
@@ -4121,8 +4090,49 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     }
 }
 
+static int sftp_worker_main(int argc, char **argv)
+{
+    is_sftp_worker = true;
+
+    /* 1. Ensure stdio streams are bound to pipes or attached console */
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
+
+    if (hOut != INVALID_HANDLE_VALUE && hOut != NULL && GetFileType(hOut) == FILE_TYPE_PIPE) {
+        int fd_in = _open_osfhandle((intptr_t)hIn, _O_RDONLY | _O_BINARY);
+        if (fd_in >= 0) _dup2(fd_in, 0);
+        int fd_out = _open_osfhandle((intptr_t)hOut, _O_WRONLY | _O_BINARY);
+        if (fd_out >= 0) _dup2(fd_out, 1);
+        if (hErr != INVALID_HANDLE_VALUE && hErr != NULL) {
+            int fd_err = _open_osfhandle((intptr_t)hErr, _O_WRONLY | _O_BINARY);
+            if (fd_err >= 0) _dup2(fd_err, 2);
+        }
+    } else {
+        if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+            freopen("CONIN$", "r", stdin);
+            freopen("CONOUT$", "w", stdout);
+            freopen("CONOUT$", "w", stderr);
+        }
+    }
+
+    /* 2. Security initialization */
+    dll_hijacking_protection();
+    enable_dit();
+
+    /* 3. Parse command-line args and run PSFTP core */
+    CmdlineArgList *arglist = cmdline_arg_list_from_GetCommandLineW();
+    int ret = psftp_main(arglist);
+    return ret;
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
+    /* Self-Invocation: Check for SFTP worker mode BEFORE any UI/COM initialization */
+    if (__argc > 1 && (strcmp(__argv[1], "--psftp") == 0 || strcmp(__argv[1], "--sftp-worker") == 0)) {
+        return sftp_worker_main(__argc, __argv);
+    }
+
     MSG msg;
     HRESULT hr;
 
