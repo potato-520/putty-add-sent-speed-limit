@@ -1726,13 +1726,41 @@
 
               case 'sftp_download_started':
                 this.showToast(`📥 开始下载: ${msg.remotePath}`);
-                this.log('info', 'DOWNLOAD', `开始下载: ${msg.remotePath} => ${msg.localPath}`);
+                this.log('info', 'DOWNLOAD', `开始下载任务: ${msg.remotePath} => ${msg.localPath} (类型: ${msg.isDirectory ? '文件夹' : '单个文件'})`);
+                const statusPathEl = document.getElementById('status-path');
+                if (statusPathEl) {
+                  statusPathEl.textContent = `📥 正在下载: ${msg.remotePath}...`;
+                }
+                break;
+
+              case 'sftp_download_progress':
+                if (msg.isDir) {
+                  this.log('info', 'DOWNLOAD', `📁 创建本地目录: ${msg.dir} => ${msg.local}`);
+                } else {
+                  let sizeInfo = '';
+                  if (msg.size) {
+                    const sz = Number(msg.size);
+                    if (sz > 1024 * 1024) sizeInfo = ` (${(sz / (1024 * 1024)).toFixed(2)} MB)`;
+                    else if (sz > 1024) sizeInfo = ` (${(sz / 1024).toFixed(1)} KB)`;
+                    else sizeInfo = ` (${sz} B)`;
+                  }
+                  this.log('info', 'DOWNLOAD', `[#${msg.count || 1}] 正在传输: ${msg.file}${sizeInfo}`);
+                  const statusPathEl2 = document.getElementById('status-path');
+                  if (statusPathEl2) {
+                    statusPathEl2.textContent = `📥 下载中 (#${msg.count || 1}): ${msg.file}`;
+                  }
+                }
                 break;
 
               case 'sftp_download_resp':
+                const curPathEl = document.getElementById('status-path');
+                if (curPathEl) {
+                  curPathEl.textContent = this.currentDir || '/';
+                }
                 if (msg.success) {
-                  this.showToast(`✅ 下载成功已保存至: ${msg.localPath}`);
-                  this.log('info', 'DOWNLOAD', `下载成功: ${msg.remotePath} => ${msg.localPath}`);
+                  const countMsg = (msg.totalFiles !== undefined && msg.totalFiles > 1) ? ` (共 ${msg.totalFiles} 个文件)` : '';
+                  this.showToast(`✅ 下载完成已保存至: ${msg.localPath}${countMsg}`);
+                  this.log('info', 'DOWNLOAD', `🎉 下载完成${countMsg}: ${msg.remotePath} => ${msg.localPath}`);
                 } else {
                   this.showToast(`❌ 下载失败: ${msg.error || '未知错误'}`);
                   this.log('error', 'DOWNLOAD', `下载失败: ${msg.remotePath} 错误: ${msg.error}`);
@@ -2133,6 +2161,8 @@
             pinItem.textContent = tabData.isPinned ? '📌 取消固定标签页' : '📌 固定标签页';
           }
 
+          menu.style.left = `${Math.min(x, window.innerWidth - 170)}px`;
+          menu.style.top = `${Math.min(y, window.innerHeight - 170)}px`;
           menu.style.left = `${Math.min(x, window.innerWidth - 180)}px`;
           menu.style.top = `${Math.min(y, window.innerHeight - 200)}px`;
           menu.classList.remove('hidden');

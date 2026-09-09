@@ -2663,6 +2663,25 @@ static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
                         if (strstr(line_sb->s, "\"sftp_ready\"")) {
                             got_ready = true;
                             dbg_log("sftp worker: received sftp_ready: %s", line_sb->s);
+                        } else if (strstr(line_sb->s, "\"sftp_download_progress\"")) {
+                            char d_file[512] = {0};
+                            json_extract_str(line_sb->s, "file", d_file, sizeof(d_file));
+                            if (!d_file[0]) json_extract_str(line_sb->s, "dir", d_file, sizeof(d_file));
+                            int cnt = json_extract_int(line_sb->s, "count");
+                            bool is_dir = json_extract_bool(line_sb->s, "isDir");
+                            if (is_dir) {
+                                dbg_log("[SFTP DOWNLOAD] 创建本地目录: %s", d_file);
+                            } else {
+                                dbg_log("[SFTP DOWNLOAD] [#%d] 传输文件: %s", cnt, d_file);
+                            }
+                        } else if (strstr(line_sb->s, "\"sftp_download_resp\"")) {
+                            int total = json_extract_int(line_sb->s, "totalFiles");
+                            bool ok = json_extract_bool(line_sb->s, "success");
+                            char rem[512] = {0}, loc[512] = {0};
+                            json_extract_str(line_sb->s, "remotePath", rem, sizeof(rem));
+                            json_extract_str(line_sb->s, "localPath", loc, sizeof(loc));
+                            dbg_log("[SFTP DOWNLOAD] 完成传输: 成功=%d, 共 %d 个文件, 远程='%s' -> 本地='%s'",
+                                    ok, total, rem, loc);
                         } else {
                             dbg_log("sftp worker: stdout json (len=%zu): %.120s...", line_sb->len, line_sb->s);
                         }

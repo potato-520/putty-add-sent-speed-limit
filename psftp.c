@@ -232,6 +232,10 @@ static void not_connected(void)
     printf("psftp: not connected to a host; use \"open host.name\"\n");
 }
 
+static int s_download_file_count = 0;
+static inline void put_str(strbuf *sb, const char *s);
+static void escape_json_string(strbuf *sb, const char *s);
+
 /* ----------------------------------------------------------------------
  * The meat of the `get' and `put' commands.
  */
@@ -277,6 +281,18 @@ bool sftp_get_file(char *fname, char *outfname, bool recurse, bool restart)
                 with_stripctrl(san, outfname)
                     printf("%s: Cannot create directory\n", san);
                 return false;
+            }
+
+            if (rpc_mode) {
+                strbuf *pb = strbuf_new();
+                put_str(pb, "{\"cmd\":\"sftp_download_progress\",\"isDir\":true,\"dir\":");
+                escape_json_string(pb, fname);
+                put_str(pb, ",\"local\":");
+                escape_json_string(pb, outfname);
+                put_str(pb, "}\n");
+                fputs(pb->s, stdout);
+                fflush(stdout);
+                strbuf_free(pb);
             }
 
             /*
@@ -463,9 +479,27 @@ bool sftp_get_file(char *fname, char *outfname, bool recurse, bool restart)
         offset = 0;
     }
 
-    with_stripctrl(san, fname) {
-        with_stripctrl(sano, outfname)
-            printf("remote:%s => local:%s\n", san, sano);
+    s_download_file_count++;
+    if (rpc_mode) {
+        strbuf *pb = strbuf_new();
+        put_fmt(pb, "{\"cmd\":\"sftp_download_progress\",\"count\":%d,\"file\":", s_download_file_count);
+        escape_json_string(pb, fname);
+        put_str(pb, ",\"local\":");
+        escape_json_string(pb, outfname);
+        if (attrs.flags & SSH_FILEXFER_ATTR_SIZE) {
+            put_fmt(pb, ",\"size\":%"PRIu64, (uint64_t)attrs.size);
+        } else {
+            put_str(pb, ",\"size\":0");
+        }
+        put_str(pb, "}\n");
+        fputs(pb->s, stdout);
+        fflush(stdout);
+        strbuf_free(pb);
+    } else {
+        with_stripctrl(san, fname) {
+            with_stripctrl(sano, outfname)
+                printf("remote:%s => local:%s\n", san, sano);
+        }
     }
 
     /*
@@ -2783,6 +2817,7 @@ static void rpc_realpath(int req_id, const char *path)
 
 static void rpc_download(int req_id, const char *remote_path, const char *local_path, bool is_dir)
 {
+    s_download_file_count = 0;
     char *cremote = canonify(remote_path);
 #ifdef _WIN32
     wchar_t *wpath = dup_mb_to_wc(CP_UTF8, local_path);
@@ -2796,8 +2831,8 @@ static void rpc_download(int req_id, const char *remote_path, const char *local_
     const char *err = ok ? "" : fxp_error();
 
     strbuf *sb = strbuf_new();
-    put_fmt(sb, "{\"cmd\":\"sftp_download_resp\",\"reqId\":%d,\"success\":%s,\"isDirectory\":%s,\"remotePath\":",
-            req_id, ok ? "true" : "false", is_dir ? "true" : "false");
+    put_fmt(sb, "{\"cmd\":\"sftp_download_resp\",\"reqId\":%d,\"success\":%s,\"isDirectory\":%s,\"totalFiles\":%d,\"remotePath\":",
+            req_id, ok ? "true" : "false", is_dir ? "true" : "false", s_download_file_count);
     escape_json_string(sb, remote_path);
     put_str(sb, ",\"localPath\":");
     escape_json_string(sb, local_path);
