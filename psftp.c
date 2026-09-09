@@ -2396,19 +2396,26 @@ static void do_sftp_cleanup(void)
     }
 }
 
+static inline void put_str(strbuf *sb, const char *s)
+{
+    if (s && *s) {
+        put_data(sb, s, strlen(s));
+    }
+}
+
 static void escape_json_string(strbuf *sb, const char *s)
 {
     put_byte(sb, '"');
     if (s) {
         for (; *s; s++) {
             unsigned char c = (unsigned char)*s;
-            if (c == '"') put_asciz(sb, "\\\"");
-            else if (c == '\\') put_asciz(sb, "\\\\");
-            else if (c == '\b') put_asciz(sb, "\\b");
-            else if (c == '\f') put_asciz(sb, "\\f");
-            else if (c == '\n') put_asciz(sb, "\\n");
-            else if (c == '\r') put_asciz(sb, "\\r");
-            else if (c == '\t') put_asciz(sb, "\\t");
+            if (c == '"') put_str(sb, "\\\"");
+            else if (c == '\\') put_str(sb, "\\\\");
+            else if (c == '\b') put_str(sb, "\\b");
+            else if (c == '\f') put_str(sb, "\\f");
+            else if (c == '\n') put_str(sb, "\\n");
+            else if (c == '\r') put_str(sb, "\\r");
+            else if (c == '\t') put_str(sb, "\\t");
             else if (c < 32) put_fmt(sb, "\\u%04x", c);
             else put_byte(sb, c);
         }
@@ -2508,10 +2515,10 @@ static void rpc_list_dir(int req_id, const char *path)
             if (names->names[i].attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS)
                 perms = names->names[i].attrs.permissions;
 
-            if (!first) put_asciz(sb, ",");
+            if (!first) put_str(sb, ",");
             first = false;
 
-            put_asciz(sb, "{\"name\":");
+            put_str(sb, "{\"name\":");
             escape_json_string(sb, fn);
             put_fmt(sb, ",\"isDir\":%s,\"size\":%"PRIu64",\"mtime\":%lu,\"permissions\":%lu}",
                     is_dir ? "true" : "false", size, mtime, perms);
@@ -2524,7 +2531,7 @@ static void rpc_list_dir(int req_id, const char *path)
     fxp_close_recv(pktin, req);
     sfree(cpath);
 
-    put_asciz(sb, "]}\n");
+    put_str(sb, "]}\n");
     fputs(sb->s, stdout);
     fflush(stdout);
     strbuf_free(sb);
@@ -2598,7 +2605,7 @@ static void rpc_read_file(int req_id, const char *path)
     } else {
         escape_json_string(sb, data_sb->s);
     }
-    put_asciz(sb, "}\n");
+    put_str(sb, "}\n");
     fputs(sb->s, stdout);
     fflush(stdout);
 
@@ -2755,7 +2762,7 @@ static void rpc_realpath(int req_id, const char *path)
     strbuf *sb = strbuf_new();
     put_fmt(sb, "{\"cmd\":\"sftp_realpath_resp\",\"reqId\":%d,\"success\":true,\"path\":", req_id);
     escape_json_string(sb, canon);
-    put_asciz(sb, "}\n");
+    put_str(sb, "}\n");
     fputs(sb->s, stdout);
     fflush(stdout);
     strbuf_free(sb);
@@ -2766,9 +2773,9 @@ static int do_sftp_rpc(void)
 {
     char buf[65536];
     strbuf *sb = strbuf_new();
-    put_asciz(sb, "{\"cmd\":\"sftp_ready\",\"homedir\":");
+    put_str(sb, "{\"cmd\":\"sftp_ready\",\"homedir\":");
     escape_json_string(sb, homedir ? homedir : "/");
-    put_asciz(sb, "}\n");
+    put_str(sb, "}\n");
     fputs(sb->s, stdout);
     fflush(stdout);
     strbuf_free(sb);

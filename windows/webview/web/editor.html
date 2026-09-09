@@ -1044,7 +1044,7 @@
                 this.sessionName = msg.sessionName || 'Session';
                 this.host = msg.host || '';
                 document.getElementById('session-badge').textContent = `${this.sessionName} (${this.host})`;
-                document.getElementById('status-conn').textContent = `● 宿主已联通 (${this.host})`;
+                document.getElementById('status-conn').textContent = `● 宿主已联通，正在验证 SFTP (${this.host})...`;
                 break;
 
               case 'sftp_ready':
@@ -1056,13 +1056,13 @@
                 break;
 
               case 'sftp_error':
-                document.getElementById('status-conn').textContent = `⚠️ SFTP 错误`;
+                document.getElementById('status-conn').textContent = `⚠️ SFTP 认证/连接失败`;
                 this.showToast('SFTP 错误: ' + (msg.error || '未知错误'));
                 const tree = document.getElementById('file-tree-container');
                 tree.innerHTML = `
-                  <div class="tree-node" style="color: #f48771;">
-                    <span class="node-icon">⚠️</span>
-                    <span>${msg.error || 'SFTP 连接失败'}</span>
+                  <div class="tree-node" style="color: #f48771; padding: 12px; line-height: 1.5; white-space: normal;">
+                    <div style="font-weight: bold; margin-bottom: 6px;"><span class="node-icon">⚠️</span> SFTP 连接失败</div>
+                    <div style="font-size: 11px; opacity: 0.85;">${msg.error || '请确认终端已登录或在密码管理器中保存凭据'}</div>
                   </div>
                 `;
                 break;

@@ -224,6 +224,7 @@ typedef struct WebViewSession {
     strbuf *prompt_input_buf;
     char temp_prompt_user[128];
     char temp_prompt_pass[256];
+    char active_auth_pass[256];
     bool tried_saved_pw;
     bool modal_remember;
     bool modal_autologin;
@@ -1373,6 +1374,8 @@ static void session_cleanup_backend(WebViewSession *sess)
     }
     smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
     sess->temp_prompt_pass[0] = '\0';
+    smemclr(sess->active_auth_pass, sizeof(sess->active_auth_pass));
+    sess->active_auth_pass[0] = '\0';
     sess->temp_prompt_user[0] = '\0';
     sess->login_failed = false;
     sess->prompt_attempts = 0;
@@ -1820,6 +1823,11 @@ static void webview_seat_notify_session_started(Seat *seat)
         int port = conf_get_int(sess->cfg, CONF_port);
         const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
         pw_delete_credential(host, port, user);
+    }
+
+    if (sess->temp_prompt_pass[0] != '\0') {
+        strncpy(sess->active_auth_pass, sess->temp_prompt_pass, sizeof(sess->active_auth_pass) - 1);
+        sess->active_auth_pass[sizeof(sess->active_auth_pass) - 1] = '\0';
     }
 
     smemclr(sess->temp_prompt_pass, sizeof(sess->temp_prompt_pass));
@@ -2294,8 +2302,10 @@ typedef struct WebViewEditorWindow {
     HANDLE h_proc;
     HANDLE h_stdin_write;
     HANDLE h_stdout_read;
+    HANDLE h_stderr_read;
     HANDLE h_reader_thread;
     bool worker_running;
+    char temp_pwfile[MAX_PATH];
 
     struct WebViewEditorWindow *next;
 } WebViewEditorWindow;
@@ -2329,15 +2339,30 @@ static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
     char line_buf[65536];
     size_t line_len = 0;
     DWORD bytes_read = 0;
+    bool got_ready = false;
 
     while (ReadFile(ed->h_stdout_read, buf, sizeof(buf) - 1, &bytes_read, NULL) && bytes_read > 0) {
+        if (ed->temp_pwfile[0] != '\0') {
+            DeleteFileA(ed->temp_pwfile);
+            ed->temp_pwfile[0] = '\0';
+        }
+
         for (DWORD i = 0; i < bytes_read; i++) {
             char ch = buf[i];
             if (ch == '\r') continue;
             if (ch == '\n') {
                 line_buf[line_len] = '\0';
-                if (line_len > 0 && ed->hwnd && IsWindow(ed->hwnd)) {
-                    webview_host_send_to_window(ed->hwnd, line_buf);
+                if (line_len > 0) {
+                    if (line_buf[0] == '{') {
+                        if (strstr(line_buf, "\"sftp_ready\"")) {
+                            got_ready = true;
+                        }
+                        if (ed->hwnd && IsWindow(ed->hwnd)) {
+                            webview_host_send_to_window(ed->hwnd, line_buf);
+                        }
+                    } else {
+                        dbg_log("sftp worker non-json stdout: %s", line_buf);
+                    }
                 }
                 line_len = 0;
             } else {
@@ -2348,9 +2373,41 @@ static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
         }
     }
 
-    if (line_len > 0 && ed->hwnd && IsWindow(ed->hwnd)) {
+    if (line_len > 0 && line_buf[0] == '{' && ed->hwnd && IsWindow(ed->hwnd)) {
         line_buf[line_len] = '\0';
+        if (strstr(line_buf, "\"sftp_ready\"")) {
+            got_ready = true;
+        }
         webview_host_send_to_window(ed->hwnd, line_buf);
+    }
+
+    if (ed->temp_pwfile[0] != '\0') {
+        DeleteFileA(ed->temp_pwfile);
+        ed->temp_pwfile[0] = '\0';
+    }
+
+    /* If worker exited without sftp_ready, read stderr to inform the UI */
+    if (!got_ready && ed->hwnd && IsWindow(ed->hwnd)) {
+        char err_text[1024] = {0};
+        DWORD err_read = 0;
+        if (ed->h_stderr_read) {
+            ReadFile(ed->h_stderr_read, err_text, sizeof(err_text) - 1, &err_read, NULL);
+            if (err_read > 0) {
+                err_text[err_read] = '\0';
+                while (err_read > 0 && (err_text[err_read - 1] == '\r' || err_text[err_read - 1] == '\n')) {
+                    err_text[--err_read] = '\0';
+                }
+            }
+        }
+        dbg_log("sftp worker exited without sftp_ready. Stderr: '%s'", err_text);
+
+        char esc_err[1024];
+        const char *raw_err = (err_text[0] != '\0') ? err_text : "SFTP 身份验证失败或进程异常退出";
+        json_escape_string(raw_err, esc_err, sizeof(esc_err));
+        char err_msg[1280];
+        snprintf(err_msg, sizeof(err_msg),
+                 "{\"cmd\":\"sftp_error\",\"error\":\"%s\"}", esc_err);
+        webview_host_send_to_window(ed->hwnd, err_msg);
     }
 
     dbg_log("sftp_reader_thread_proc: exited for hwnd=%p", (void*)ed->hwnd);
@@ -2361,6 +2418,11 @@ static void sftp_worker_stop(WebViewEditorWindow *ed)
 {
     if (!ed || !ed->worker_running) return;
     dbg_log("sftp_worker_stop: stopping worker for hwnd=%p", (void*)ed->hwnd);
+
+    if (ed->temp_pwfile[0] != '\0') {
+        DeleteFileA(ed->temp_pwfile);
+        ed->temp_pwfile[0] = '\0';
+    }
 
     if (ed->h_stdin_write) {
         DWORD written = 0;
@@ -2388,6 +2450,11 @@ static void sftp_worker_stop(WebViewEditorWindow *ed)
     if (ed->h_stdout_read) {
         CloseHandle(ed->h_stdout_read);
         ed->h_stdout_read = NULL;
+    }
+
+    if (ed->h_stderr_read) {
+        CloseHandle(ed->h_stderr_read);
+        ed->h_stderr_read = NULL;
     }
 
     ed->worker_running = false;
@@ -2434,8 +2501,75 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
 
     const char *host = conf_get_str(sess->cfg, CONF_host);
     int port = conf_get_int(sess->cfg, CONF_port);
-    const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
-    const char *pass = sess->temp_prompt_pass;
+    const char *cfg_user = conf_get_str_ambi(sess->cfg, CONF_username, NULL);
+    char effective_user[128] = {0};
+    if (sess->temp_prompt_user[0] != '\0') {
+        strncpy(effective_user, sess->temp_prompt_user, sizeof(effective_user) - 1);
+    } else if (cfg_user && *cfg_user) {
+        strncpy(effective_user, cfg_user, sizeof(effective_user) - 1);
+    }
+
+    char pass[256] = {0};
+    if (sess->active_auth_pass[0] != '\0') {
+        strncpy(pass, sess->active_auth_pass, sizeof(pass) - 1);
+    } else if (sess->temp_prompt_pass[0] != '\0') {
+        strncpy(pass, sess->temp_prompt_pass, sizeof(pass) - 1);
+    } else {
+        /* Fallback: load saved credentials from pw/ directory */
+        bool loaded = false;
+        if (effective_user[0] != '\0') {
+            wchar_t fp[MAX_PATH];
+            pw_get_user_filepath(fp, MAX_PATH, host, port, effective_user);
+            bool rem = false, autolog = false;
+            char u[128] = {0};
+            if (pw_load_single_file(fp, u, sizeof(u), pass, sizeof(pass), &rem, &autolog)) {
+                loaded = true;
+                dbg_log("sftp_worker_start: loaded saved password for %s@%s:%d from %ls", effective_user, host, port, fp);
+            }
+        }
+        if (!loaded) {
+            /* Try last user file */
+            wchar_t last_file[MAX_PATH];
+            pw_get_last_user_filepath(last_file, MAX_PATH, host, port);
+            FILE *lfp = _wfopen(last_file, L"r");
+            if (lfp) {
+                char last_u[128] = {0};
+                if (fgets(last_u, sizeof(last_u), lfp)) {
+                    char *nl = strpbrk(last_u, "\r\n");
+                    if (nl) *nl = '\0';
+                    if (last_u[0] != '\0') {
+                        wchar_t fp[MAX_PATH];
+                        pw_get_user_filepath(fp, MAX_PATH, host, port, last_u);
+                        bool rem = false, autolog = false;
+                        char u[128] = {0};
+                        if (pw_load_single_file(fp, u, sizeof(u), pass, sizeof(pass), &rem, &autolog)) {
+                            loaded = true;
+                            if (effective_user[0] == '\0') {
+                                strncpy(effective_user, last_u, sizeof(effective_user) - 1);
+                            }
+                            dbg_log("sftp_worker_start: loaded saved password for last user %s@%s:%d", last_u, host, port);
+                        }
+                    }
+                }
+                fclose(lfp);
+            }
+        }
+        if (!loaded) {
+            /* Try legacy file */
+            wchar_t legacy_file[MAX_PATH];
+            pw_get_legacy_filepath(legacy_file, MAX_PATH, host, port);
+            bool rem = false, autolog = false;
+            char u[128] = {0};
+            if (pw_load_single_file(legacy_file, u, sizeof(u), pass, sizeof(pass), &rem, &autolog)) {
+                loaded = true;
+                if (effective_user[0] == '\0' && u[0] != '\0') {
+                    strncpy(effective_user, u, sizeof(effective_user) - 1);
+                }
+                dbg_log("sftp_worker_start: loaded saved password from legacy file %ls", legacy_file);
+            }
+        }
+    }
+
     Filename *keyfn = conf_get_filename(sess->cfg, CONF_keyfile);
     const char *keyfile = keyfn ? filename_to_str(keyfn) : "";
 
@@ -2448,17 +2582,33 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     if (keyfile && *keyfile) {
         len += snprintf(cmdline + len, sizeof(cmdline) - len, " -i \"%s\"", keyfile);
     }
-    if (pass && *pass) {
-        len += snprintf(cmdline + len, sizeof(cmdline) - len, " -pw \"%s\"", pass);
+    if (pass[0] != '\0') {
+        char temp_dir[MAX_PATH];
+        GetTempPathA(sizeof(temp_dir), temp_dir);
+        char temp_file[MAX_PATH];
+        if (GetTempFileNameA(temp_dir, "ptp", 0, temp_file)) {
+            FILE *pfp = fopen(temp_file, "wb");
+            if (pfp) {
+                fprintf(pfp, "%s\n", pass);
+                fclose(pfp);
+                strncpy(ed->temp_pwfile, temp_file, sizeof(ed->temp_pwfile) - 1);
+                len += snprintf(cmdline + len, sizeof(cmdline) - len, " -pwfile \"%s\"", temp_file);
+            } else {
+                len += snprintf(cmdline + len, sizeof(cmdline) - len, " -pw \"%s\"", pass);
+            }
+        } else {
+            len += snprintf(cmdline + len, sizeof(cmdline) - len, " -pw \"%s\"", pass);
+        }
+        smemclr(pass, sizeof(pass));
     }
-    if (user && *user) {
-        len += snprintf(cmdline + len, sizeof(cmdline) - len, " %s@%s", user, (host && *host) ? host : "localhost");
+    if (effective_user[0] != '\0') {
+        len += snprintf(cmdline + len, sizeof(cmdline) - len, " %s@%s", effective_user, (host && *host) ? host : "localhost");
     } else {
         len += snprintf(cmdline + len, sizeof(cmdline) - len, " %s", (host && *host) ? host : "localhost");
     }
 
-    dbg_log("sftp_worker_start: spawning psftp for session %d (port=%d, host=%s, user=%s)",
-            ed->session_id, port, host, user ? user : "");
+    dbg_log("sftp_worker_start: spawning psftp for session %d (port=%d, host=%s, user=%s, has_key=%d, has_pwfile=%d)",
+            ed->session_id, port, host, effective_user, (keyfile && *keyfile) ? 1 : 0, (ed->temp_pwfile[0] != '\0') ? 1 : 0);
 
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
@@ -2467,15 +2617,24 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
 
     HANDLE h_stdin_read = NULL;
     HANDLE h_stdout_write = NULL;
+    HANDLE h_stderr_write = NULL;
 
     if (!CreatePipe(&h_stdin_read, &ed->h_stdin_write, &sa, 0)) {
         dbg_log("sftp_worker_start: CreatePipe stdin failed %lu", GetLastError());
+        if (ed->temp_pwfile[0] != '\0') {
+            DeleteFileA(ed->temp_pwfile);
+            ed->temp_pwfile[0] = '\0';
+        }
         return false;
     }
     SetHandleInformation(ed->h_stdin_write, HANDLE_FLAG_INHERIT, 0);
 
     if (!CreatePipe(&ed->h_stdout_read, &h_stdout_write, &sa, 0)) {
         dbg_log("sftp_worker_start: CreatePipe stdout failed %lu", GetLastError());
+        if (ed->temp_pwfile[0] != '\0') {
+            DeleteFileA(ed->temp_pwfile);
+            ed->temp_pwfile[0] = '\0';
+        }
         CloseHandle(h_stdin_read);
         CloseHandle(ed->h_stdin_write);
         ed->h_stdin_write = NULL;
@@ -2483,7 +2642,11 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     }
     SetHandleInformation(ed->h_stdout_read, HANDLE_FLAG_INHERIT, 0);
 
-    HANDLE h_nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+    if (!CreatePipe(&ed->h_stderr_read, &h_stderr_write, &sa, 0)) {
+        ed->h_stderr_read = NULL;
+    } else {
+        SetHandleInformation(ed->h_stderr_read, HANDLE_FLAG_INHERIT, 0);
+    }
 
     STARTUPINFOA si;
     ZeroMemory(&si, sizeof(si));
@@ -2491,7 +2654,7 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = h_stdin_read;
     si.hStdOutput = h_stdout_write;
-    si.hStdError = (h_nul != INVALID_HANDLE_VALUE) ? h_nul : h_stdout_write;
+    si.hStdError = h_stderr_write ? h_stderr_write : h_stdout_write;
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
@@ -2500,12 +2663,20 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
 
     CloseHandle(h_stdin_read);
     CloseHandle(h_stdout_write);
-    if (h_nul != INVALID_HANDLE_VALUE) CloseHandle(h_nul);
+    if (h_stderr_write) CloseHandle(h_stderr_write);
 
     if (!ok) {
         dbg_log("sftp_worker_start: CreateProcessA failed %lu", GetLastError());
+        if (ed->temp_pwfile[0] != '\0') {
+            DeleteFileA(ed->temp_pwfile);
+            ed->temp_pwfile[0] = '\0';
+        }
         CloseHandle(ed->h_stdin_write);
         CloseHandle(ed->h_stdout_read);
+        if (ed->h_stderr_read) {
+            CloseHandle(ed->h_stderr_read);
+            ed->h_stderr_read = NULL;
+        }
         ed->h_stdin_write = NULL;
         ed->h_stdout_read = NULL;
         char err_msg[256];
