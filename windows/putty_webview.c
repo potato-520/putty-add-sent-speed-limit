@@ -2022,6 +2022,38 @@ void write_aclip(HWND hwnd, int clipboard, char *data, int len)
     copy_to_clipboard_utf8(hwnd, data, len);
 }
 
+static bool query_reg_string(HKEY hRoot, const wchar_t *subKey, const wchar_t *valueName, wchar_t *out, size_t max_len)
+{
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(hRoot, subKey, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        return false;
+
+    DWORD type = 0;
+    DWORD bytes = (DWORD)(max_len * sizeof(wchar_t));
+    LONG res = RegQueryValueExW(hKey, valueName, NULL, &type, (LPBYTE)out, &bytes);
+    RegCloseKey(hKey);
+
+    if (res == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+        out[max_len - 1] = L'\0';
+        /* Strip surrounding quotes if present */
+        if (out[0] == L'"') {
+            size_t len = wcslen(out);
+            if (len > 1 && out[len - 1] == L'"') {
+                out[len - 1] = L'\0';
+                memmove(out, out + 1, len * sizeof(wchar_t));
+            }
+        }
+        /* If there are command line arguments e.g. "...\Code.exe" "%1", strip after .exe */
+        wchar_t *exe_ext = wcsstr(out, L".exe");
+        if (!exe_ext) exe_ext = wcsstr(out, L".EXE");
+        if (exe_ext) {
+            *(exe_ext + 4) = L'\0';
+        }
+        return (out[0] != L'\0');
+    }
+    return false;
+}
+
 static bool find_vscode_path(wchar_t *out_path, size_t max_len)
 {
     /* 1. Check SearchPathW for Code.exe */
@@ -2030,7 +2062,25 @@ static bool find_vscode_path(wchar_t *out_path, size_t max_len)
             return true;
     }
 
-    /* 2. Check %LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe */
+    /* 2. Check Windows Registry: HKCU App Paths */
+    if (query_reg_string(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Code.exe", NULL, out_path, max_len)) {
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    /* 3. Check Windows Registry: HKLM App Paths */
+    if (query_reg_string(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Code.exe", NULL, out_path, max_len)) {
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    /* 4. Check Windows Registry: HKCR Applications */
+    if (query_reg_string(HKEY_CLASSES_ROOT, L"Applications\\Code.exe\\shell\\open\\command", NULL, out_path, max_len)) {
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    /* 5. Check %LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe */
     wchar_t localappdata[MAX_PATH];
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", localappdata, MAX_PATH) > 0) {
         _snwprintf(out_path, max_len, L"%s\\Programs\\Microsoft VS Code\\Code.exe", localappdata);
@@ -2038,7 +2088,7 @@ static bool find_vscode_path(wchar_t *out_path, size_t max_len)
             return true;
     }
 
-    /* 3. Check %ProgramFiles%\Microsoft VS Code\Code.exe */
+    /* 6. Check %ProgramFiles%\Microsoft VS Code\Code.exe */
     wchar_t progfiles[MAX_PATH];
     if (GetEnvironmentVariableW(L"ProgramFiles", progfiles, MAX_PATH) > 0) {
         _snwprintf(out_path, max_len, L"%s\\Microsoft VS Code\\Code.exe", progfiles);
@@ -2046,7 +2096,7 @@ static bool find_vscode_path(wchar_t *out_path, size_t max_len)
             return true;
     }
 
-    /* 4. Check %ProgramFiles(x86)%\Microsoft VS Code\Code.exe */
+    /* 7. Check %ProgramFiles(x86)%\Microsoft VS Code\Code.exe */
     if (GetEnvironmentVariableW(L"ProgramFiles(x86)", progfiles, MAX_PATH) > 0) {
         _snwprintf(out_path, max_len, L"%s\\Microsoft VS Code\\Code.exe", progfiles);
         if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
@@ -2054,6 +2104,154 @@ static bool find_vscode_path(wchar_t *out_path, size_t max_len)
     }
 
     return false;
+}
+
+static bool get_default_wsl_distro(char *out_distro, size_t max_len)
+{
+    HKEY hLxss = NULL;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Lxss",
+                      0, KEY_READ, &hLxss) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    wchar_t default_guid[128] = {0};
+    DWORD guid_size = sizeof(default_guid);
+    DWORD type = 0;
+    LONG res = RegQueryValueExW(hLxss, L"DefaultDistribution", NULL, &type,
+                                (LPBYTE)default_guid, &guid_size);
+    bool found = false;
+    if (res == ERROR_SUCCESS && default_guid[0]) {
+        HKEY hDistro = NULL;
+        if (RegOpenKeyExW(hLxss, default_guid, 0, KEY_READ, &hDistro) == ERROR_SUCCESS) {
+            wchar_t wdistro[128] = {0};
+            DWORD distro_size = sizeof(wdistro);
+            if (RegQueryValueExW(hDistro, L"DistributionName", NULL, &type,
+                                 (LPBYTE)wdistro, &distro_size) == ERROR_SUCCESS && wdistro[0]) {
+                WideCharToMultiByte(CP_UTF8, 0, wdistro, -1, out_distro, (int)max_len, NULL, NULL);
+                found = true;
+            }
+            RegCloseKey(hDistro);
+        }
+    }
+
+    if (!found) {
+        DWORD idx = 0;
+        wchar_t subkey_name[256];
+        DWORD subkey_len = sizeof(subkey_name) / sizeof(wchar_t);
+        while (RegEnumKeyExW(hLxss, idx++, subkey_name, &subkey_len, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
+            subkey_len = sizeof(subkey_name) / sizeof(wchar_t);
+            HKEY hDistro = NULL;
+            if (RegOpenKeyExW(hLxss, subkey_name, 0, KEY_READ, &hDistro) == ERROR_SUCCESS) {
+                wchar_t wdistro[128] = {0};
+                DWORD distro_size = sizeof(wdistro);
+                if (RegQueryValueExW(hDistro, L"DistributionName", NULL, &type,
+                                     (LPBYTE)wdistro, &distro_size) == ERROR_SUCCESS && wdistro[0]) {
+                    WideCharToMultiByte(CP_UTF8, 0, wdistro, -1, out_distro, (int)max_len, NULL, NULL);
+                    found = true;
+                    RegCloseKey(hDistro);
+                    break;
+                }
+                RegCloseKey(hDistro);
+            }
+        }
+    }
+
+    RegCloseKey(hLxss);
+    return found;
+}
+
+static void get_session_wsl_distro(WebViewSession *sess, char *out_distro, size_t max_len)
+{
+    out_distro[0] = '\0';
+    if (sess && sess->cfg) {
+        /* Check CONF_remote_cmd e.g. "wsl.exe -d Ubuntu ~" */
+        const char *rcmd = conf_get_str(sess->cfg, CONF_remote_cmd);
+        if (rcmd && *rcmd) {
+            const char *d = strstr(rcmd, "-d ");
+            if (d) {
+                d += 3;
+                while (*d == ' ') d++;
+                const char *space = strchr(d, ' ');
+                size_t len = space ? (size_t)(space - d) : strlen(d);
+                if (len > 0 && len < max_len) {
+                    strncpy(out_distro, d, len);
+                    out_distro[len] = '\0';
+                    return;
+                }
+            }
+        }
+
+        /* Check CONF_host e.g. "wsl:Ubuntu" */
+        const char *host = conf_get_str(sess->cfg, CONF_host);
+        if (host && !strnicmp(host, "wsl:", 4)) {
+            const char *d = host + 4;
+            if (*d && strlen(d) < max_len) {
+                strncpy(out_distro, d, max_len - 1);
+                out_distro[max_len - 1] = '\0';
+                return;
+            }
+        }
+    }
+
+    /* Fallback to Windows Registry default WSL distro */
+    if (get_default_wsl_distro(out_distro, max_len)) {
+        return;
+    }
+
+    /* Final fallback */
+    strncpy(out_distro, "Ubuntu", max_len - 1);
+    out_distro[max_len - 1] = '\0';
+}
+
+static bool launch_wsl_code(const char *distro, const char *linux_path, int line)
+{
+    wchar_t wdistro[128] = {0};
+    if (distro && *distro) {
+        MultiByteToWideChar(CP_UTF8, 0, distro, -1, wdistro, sizeof(wdistro) / sizeof(wchar_t));
+    }
+
+    wchar_t wpath[MAX_PATH * 2] = {0};
+    MultiByteToWideChar(CP_UTF8, 0, linux_path, -1, wpath, sizeof(wpath) / sizeof(wchar_t));
+
+    wchar_t cmd[MAX_PATH * 4] = {0};
+    if (wdistro[0]) {
+        if (line > 0) {
+            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
+                       L"wsl.exe -d \"%s\" -- code -g \"%s:%d\"", wdistro, wpath, line);
+        } else {
+            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
+                       L"wsl.exe -d \"%s\" -- code -g \"%s\"", wdistro, wpath);
+        }
+    } else {
+        if (line > 0) {
+            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
+                       L"wsl.exe -- code -g \"%s:%d\"", wpath, line);
+        } else {
+            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
+                       L"wsl.exe -- code -g \"%s\"", wpath);
+        }
+    }
+
+    dbg_log("launch_wsl_code: running cmdline: %ls", cmd);
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    memset(&pi, 0, sizeof(pi));
+
+    BOOL ok = CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
+                             CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    if (ok) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return true;
+    } else {
+        dbg_log("launch_wsl_code: CreateProcessW failed with err=%lu", GetLastError());
+        return false;
+    }
 }
 
 static void url_decode(char *dst, const char *src)
@@ -2074,12 +2272,12 @@ static void url_decode(char *dst, const char *src)
     *dst = '\0';
 }
 
-static void open_url_or_file(HWND hwnd, const char *input)
+static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
 {
     if (!input || !*input)
         return;
 
-    dbg_log("open_url_or_file: raw input='%s'", input);
+    dbg_log("open_url_or_file: sess_id=%d, raw input='%s'", sess_id, input);
 
     /* Web links or email */
     if (!strncmp(input, "http://", 7) || !strncmp(input, "https://", 8) || !strncmp(input, "mailto:", 7)) {
@@ -2122,7 +2320,7 @@ static void open_url_or_file(HWND hwnd, const char *input)
         *hash = '\0';
     }
 
-    /* If no hash, check for trailing :line (e.g. ML86306Ctl.c:1779) */
+    /* If no hash, check for trailing :line or :line:col */
     if (line == 0) {
         char *colon = strrchr(raw, ':');
         if (colon && colon > raw + 2) {
@@ -2132,8 +2330,23 @@ static void open_url_or_file(HWND hwnd, const char *input)
                 if (*q < '0' || *q > '9') { all_digits = false; break; }
             }
             if (all_digits) {
-                line = atoi(p);
                 *colon = '\0';
+                char *colon1 = strrchr(raw, ':');
+                if (colon1 && colon1 > raw + 2) {
+                    char *p1 = colon1 + 1;
+                    bool c1_digits = (*p1 != '\0');
+                    for (char *q = p1; *q; q++) {
+                        if (*q < '0' || *q > '9') { c1_digits = false; break; }
+                    }
+                    if (c1_digits) {
+                        line = atoi(p1);
+                        *colon1 = '\0';
+                    } else {
+                        line = atoi(p);
+                    }
+                } else {
+                    line = atoi(p);
+                }
             }
         }
     }
@@ -2156,19 +2369,34 @@ static void open_url_or_file(HWND hwnd, const char *input)
         }
     }
 
+    WebViewSession *sess = session_find(sess_id);
+    char distro[128] = {0};
+    get_session_wsl_distro(sess, distro, sizeof(distro));
+
+    bool is_mnt = (p[0] == '/' && (p[1] == 'm' || p[1] == 'M') && (p[2] == 'n' || p[2] == 'N') &&
+                   (p[3] == 't' || p[3] == 'T') && p[4] == '/' && isalpha((unsigned char)p[5]) &&
+                   (p[6] == '/' || p[6] == '\0'));
+
+    /* Check if it's a Linux native path like /home/..., /var/..., /etc/... */
+    if (p[0] == '/' && !is_mnt) {
+        dbg_log("open_url_or_file: native Linux path '%s', trying WSL launch with distro '%s'", p, distro);
+        if (launch_wsl_code(distro, p, line)) {
+            dbg_log("open_url_or_file: launched via wsl.exe code successfully");
+            return;
+        }
+        dbg_log("open_url_or_file: launch_wsl_code failed, falling back to UNC path");
+    }
+
     char win_path[MAX_PATH * 2] = {0};
-    /* Check if WSL path like /mnt/c/... */
-    if (p[0] == '/' && (p[1] == 'm' || p[1] == 'M') && (p[2] == 'n' || p[2] == 'N') &&
-        (p[3] == 't' || p[3] == 'T') && p[4] == '/' && isalpha((unsigned char)p[5]) &&
-        (p[6] == '/' || p[6] == '\0')) {
+    if (is_mnt) {
         char drive = (char)toupper((unsigned char)p[5]);
         const char *rest = (p[6] == '/') ? (p + 7) : "";
         snprintf(win_path, sizeof(win_path), "%c:\\%s", drive, rest);
     } else if (isalpha((unsigned char)p[0]) && p[1] == ':') {
         snprintf(win_path, sizeof(win_path), "%s", p);
     } else if (p[0] == '/' && p[1] != '/') {
-        /* WSL root / Linux path e.g. /home/... */
-        snprintf(win_path, sizeof(win_path), "\\\\wsl.localhost\\Ubuntu%s", p);
+        /* WSL root / Linux path fallback e.g. \\wsl.localhost\<distro>\home\... */
+        snprintf(win_path, sizeof(win_path), "\\\\wsl.localhost\\%s%s", distro, p);
     } else {
         snprintf(win_path, sizeof(win_path), "%s", p);
     }
@@ -2741,7 +2969,20 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
         copy_to_clipboard_utf8(hwnd, payload, strlen(payload));
     } else if (type == '5') {
         /* Open URL or local file / jump to line */
-        open_url_or_file(hwnd, payload);
+        int sess_id = 0;
+        const char *link_payload = payload;
+        const char *colon = strchr(payload, ':');
+        if (colon && colon > payload) {
+            bool all_digits = true;
+            for (const char *q = payload; q < colon; q++) {
+                if (*q < '0' || *q > '9') { all_digits = false; break; }
+            }
+            if (all_digits) {
+                sess_id = atoi(payload);
+                link_payload = colon + 1;
+            }
+        }
+        open_url_or_file(hwnd, sess_id, link_payload);
     } else if (type == 'P') {
         /* WebView SSH Auth response: P{sess_id}:{json} or P{sess_id}:cancel */
         const char *colon = strchr(payload, ':');

@@ -1859,7 +1859,7 @@
           allowNonHttpProtocols: true,
           activate: (e, text, range) => {
             hideLinkTooltip();
-            sendToHost('5', text);
+            sendToHost('5', `${id}:${text}`);
           },
           hover: (e, text, range) => {
             showLinkTooltip(e, text);
@@ -1876,7 +1876,7 @@
       if (window.WebLinksAddon) {
         term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => {
           hideLinkTooltip();
-          sendToHost('5', uri);
+          sendToHost('5', `${id}:${uri}`);
         }, {
           hover: (e, text, range) => {
             showLinkTooltip(e, text);
@@ -1897,7 +1897,7 @@
             e.stopPropagation();
             const targetUri = activeHoverLink;
             hideLinkTooltip();
-            sendToHost('5', targetUri);
+            sendToHost('5', `${id}:${targetUri}`);
             return;
           }
           e.preventDefault();
