@@ -646,6 +646,79 @@
       align-items: center;
       gap: 4px;
     }
+
+    /* Log Drawer / Modal */
+    #log-modal {
+      position: fixed;
+      bottom: 22px;
+      right: 12px;
+      width: min(820px, calc(100vw - 24px));
+      height: 380px;
+      background: #141416;
+      border: 1px solid var(--border-color);
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.7);
+      display: flex;
+      flex-direction: column;
+      z-index: 1000;
+      backdrop-filter: blur(10px);
+    }
+    #log-modal.hidden {
+      display: none !important;
+    }
+    .log-header {
+      height: 36px;
+      background: #1e1e22;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-weight: 600;
+      font-size: 12px;
+      border-radius: 8px 8px 0 0;
+    }
+    .log-tools {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .log-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #ccc;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .log-btn:hover {
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+    }
+    .log-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11.5px;
+      line-height: 1.5;
+      background: #0f0f11;
+      color: #ddd;
+      user-select: text;
+    }
+    .log-line {
+      margin-bottom: 3px;
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    .log-time { color: #5c6370; margin-right: 6px; }
+    .log-tag-info { color: #61afef; }
+    .log-tag-send { color: #98c379; }
+    .log-tag-recv { color: #c678dd; }
+    .log-tag-error { color: #e06c75; font-weight: bold; }
+    .log-tag-host { color: #e5c07b; }
   </style>
 </head>
 <body>
@@ -661,6 +734,7 @@
     <div class="top-actions">
       <button class="btn-action btn-save" id="btn-save" title="保存文件 (Ctrl+S)">💾 保存</button>
       <button class="btn-action" id="btn-refresh" title="刷新文件列表">🔄 刷新</button>
+      <button class="btn-action" id="btn-logs" title="查看运行与通信日志">📋 日志 <span id="log-badge" style="display:none;background:#e06c75;color:#fff;border-radius:8px;padding:0 5px;font-size:10px;margin-left:2px;">!</span></button>
       <button class="btn-action" id="btn-close" title="关闭窗口">✕ 关闭</button>
     </div>
   </div>
@@ -740,12 +814,32 @@
     <div class="status-left">
       <div class="status-item" id="status-conn">● 初始化中...</div>
       <div class="status-item" id="status-path">/</div>
+      <div class="status-item" id="status-log-btn" style="cursor:pointer; opacity: 0.9;" title="点击打开日志面板">📋 日志</div>
     </div>
     <div class="status-right">
       <div class="status-item" id="status-pos">Ln 1, Col 1</div>
       <div class="status-item" id="status-encoding">UTF-8</div>
       <div class="status-item" id="status-lang">Plain Text</div>
     </div>
+  </div>
+
+  <!-- Log Drawer / Modal -->
+  <div id="log-modal" class="hidden">
+    <div class="log-header">
+      <div class="log-title">
+        <span>📋</span> SFTP 引擎与通信日志
+      </div>
+      <div class="log-tools">
+        <label style="font-size: 11px; font-weight: normal; display: flex; align-items: center; gap: 4px; color: #aaa; cursor: pointer; margin-right: 6px;">
+          <input type="checkbox" id="chk-log-autoscroll" checked /> 自动滚动
+        </label>
+        <button class="log-btn" id="btn-log-fetch-host" title="拉取 PuTTY C 宿主底层日志">🔄 拉取宿主日志</button>
+        <button class="log-btn" id="btn-log-copy" title="复制全部日志到剪贴板">📋 复制</button>
+        <button class="log-btn" id="btn-log-clear" title="清空当前日志">🗑️ 清空</button>
+        <button class="log-btn" id="btn-log-close" title="关闭日志面板">✕</button>
+      </div>
+    </div>
+    <div class="log-content" id="log-container"></div>
   </div>
 
   <div id="toast">已保存</div>
@@ -934,10 +1028,84 @@
         tabs: new Map(),
         activePath: null,
         pendingOpenFile: null,
+        logs: [],
+
+        log(level, tag, message) {
+          const now = new Date();
+          const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+          const item = { time: timeStr, level, tag, message };
+          this.logs.push(item);
+          if (this.logs.length > 1000) this.logs.shift();
+
+          const container = document.getElementById('log-container');
+          if (container) {
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.innerHTML = `<span class="log-time">[${timeStr}]</span> <span class="log-tag-${level}">[${tag}]</span> ${this.escapeHtml(message)}`;
+            container.appendChild(line);
+            if (document.getElementById('chk-log-autoscroll')?.checked !== false) {
+              container.scrollTop = container.scrollHeight;
+            }
+          }
+
+          if (level === 'error') {
+            const badge = document.getElementById('log-badge');
+            if (badge) badge.style.display = 'inline';
+            const statBadge = document.getElementById('status-log-btn');
+            if (statBadge) statBadge.style.color = '#f48771';
+          }
+        },
+
+        escapeHtml(str) {
+          if (typeof str !== 'string') {
+            try { str = JSON.stringify(str); } catch (e) { str = String(str); }
+          }
+          return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        },
+
+        toggleLogModal(forceState) {
+          const modal = document.getElementById('log-modal');
+          if (!modal) return;
+          const show = (forceState !== undefined) ? forceState : modal.classList.contains('hidden');
+          modal.classList.toggle('hidden', !show);
+          if (show) {
+            const badge = document.getElementById('log-badge');
+            if (badge) badge.style.display = 'none';
+            const statBadge = document.getElementById('status-log-btn');
+            if (statBadge) statBadge.style.color = '';
+            const container = document.getElementById('log-container');
+            if (container) container.scrollTop = container.scrollHeight;
+          }
+        },
+
+        copyLogs() {
+          const text = this.logs.map(l => `[${l.time}] [${l.tag}] ${typeof l.message === 'string' ? l.message : JSON.stringify(l.message)}`).join('\n');
+          navigator.clipboard.writeText(text).then(() => {
+            this.showToast('日志已复制到剪贴板');
+          }).catch(() => {
+            this.showToast('复制失败，请手动选取文字');
+          });
+        },
+
+        clearLogs() {
+          this.logs = [];
+          const container = document.getElementById('log-container');
+          if (container) container.innerHTML = '';
+          this.showToast('日志已清空');
+        },
+
+        fetchHostLogs() {
+          this.log('info', 'FETCH', '正在向 PuTTY C 宿主请求最新底层调试日志...');
+          this.send({ cmd: 'get_host_log' });
+        },
 
         send(obj) {
           if (window.chrome && window.chrome.webview) {
             const str = (typeof obj === 'string') ? obj : JSON.stringify(obj);
+            if (this.log) {
+              const cmdName = (typeof obj === 'object' && obj.cmd) ? obj.cmd : 'raw';
+              this.log('send', 'IPC SEND', `${cmdName} ${str.length > 120 ? str.substring(0, 120) + '...' : str}`);
+            }
             window.chrome.webview.postMessage(str);
           }
         },
@@ -948,9 +1116,11 @@
             const timer = setTimeout(() => {
               if (this.pendingReqs.has(reqId)) {
                 this.pendingReqs.delete(reqId);
-                reject(new Error(`Request timeout for cmd: ${cmd}`));
+                const timeoutMsg = `请求超时 (cmd: ${cmd}, reqId: ${reqId})`;
+                this.log('error', 'TIMEOUT', timeoutMsg);
+                reject(new Error(timeoutMsg));
               }
-            }, 20000);
+            }, 30000);
 
             this.pendingReqs.set(reqId, { resolve, reject, timer });
             this.send({ cmd, reqId, ...params });
@@ -958,6 +1128,7 @@
         },
 
         init() {
+          this.log('info', 'INIT', 'PuTTY Remote File Editor 初始化...');
           imageViewer.init();
           this.initMonaco();
           this.send({ cmd: 'editor_init' });
@@ -975,6 +1146,7 @@
               require.config({ paths: { 'vs': './vs' } });
               require(['vs/editor/editor.main'], () => {
                 console.log('[Monaco] Loaded successfully');
+                this.log('info', 'MONACO', 'Monaco 编辑器离线引擎加载完成');
                 this.monacoReady = true;
                 const container = document.getElementById('monaco-container');
                 this.editor = monaco.editor.create(container, {
@@ -1007,6 +1179,7 @@
                 }
               }, err => {
                 console.warn('[Monaco] Load failed, falling back to textarea editor:', err);
+                this.log('error', 'MONACO', 'Monaco 加载失败，降级为轻量编辑器: ' + err);
                 this.monacoReady = false;
                 if (this.pendingOpenFile) {
                   const { path, line } = this.pendingOpenFile;
@@ -1017,6 +1190,7 @@
             }
           } catch (e) {
             console.warn('[Monaco] Init error, using fallback:', e);
+            this.log('error', 'MONACO', 'Monaco 初始化异常: ' + e);
             this.monacoReady = false;
             if (this.pendingOpenFile) {
               const { path, line } = this.pendingOpenFile;
@@ -1030,6 +1204,14 @@
           try {
             const msg = (typeof data === 'string') ? JSON.parse(data) : data;
             console.log('[Editor IPC Recv]', msg.cmd, msg);
+
+            if (msg.cmd === 'host_log_resp') {
+              this.log('host', 'HOST LOG', msg.content || '(宿主调试日志为空)');
+              return;
+            }
+
+            const summary = msg.cmd + (msg.error ? ` [错误: ${msg.error}]` : '') + (msg.path ? ` path=${msg.path}` : '') + (msg.success !== undefined ? ` success=${msg.success}` : '');
+            this.log(msg.error ? 'error' : 'recv', 'IPC RECV', summary);
 
             if (msg.reqId && this.pendingReqs.has(msg.reqId)) {
               const { resolve, timer } = this.pendingReqs.get(msg.reqId);
@@ -1045,6 +1227,7 @@
                 this.host = msg.host || '';
                 document.getElementById('session-badge').textContent = `${this.sessionName} (${this.host})`;
                 document.getElementById('status-conn').textContent = `● 宿主已联通，正在验证 SFTP (${this.host})...`;
+                this.log('info', 'STATUS', `已连接到终端会话 ${this.sessionId} (${this.host})`);
                 break;
 
               case 'sftp_ready':
@@ -1052,22 +1235,29 @@
                 this.currentDir = this.homedir;
                 document.getElementById('status-conn').textContent = `● SFTP 就绪 (${this.host})`;
                 document.getElementById('sidebar-path-input').value = this.currentDir;
+                this.log('info', 'SFTP', `SFTP 引擎认证成功就绪，初始主目录: ${this.homedir}`);
                 this.loadDirectory(this.currentDir);
                 break;
 
               case 'sftp_error':
                 document.getElementById('status-conn').textContent = `⚠️ SFTP 认证/连接失败`;
                 this.showToast('SFTP 错误: ' + (msg.error || '未知错误'));
+                this.log('error', 'SFTP ERROR', msg.error || 'SFTP 连接/认证失败');
                 const tree = document.getElementById('file-tree-container');
                 tree.innerHTML = `
-                  <div class="tree-node" style="color: #f48771; padding: 12px; line-height: 1.5; white-space: normal;">
+                  <div class="tree-node" style="color: #f48771; padding: 12px; line-height: 1.6; white-space: normal;">
                     <div style="font-weight: bold; margin-bottom: 6px;"><span class="node-icon">⚠️</span> SFTP 连接失败</div>
-                    <div style="font-size: 11px; opacity: 0.85;">${msg.error || '请确认终端已登录或在密码管理器中保存凭据'}</div>
+                    <div style="font-size: 11.5px; opacity: 0.9; margin-bottom: 10px;">${this.escapeHtml(msg.error || '请确认终端已登录或在密码管理器中保存凭据')}</div>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                      <button class="log-btn" onclick="bridge.toggleLogModal(true)">📋 查看运行日志</button>
+                      <button class="log-btn" onclick="bridge.fetchHostLogs(); bridge.toggleLogModal(true)">🔄 拉取宿主底层日志</button>
+                    </div>
                   </div>
                 `;
                 break;
 
               case 'open_file':
+                this.log('info', 'OPEN', `打开文件请求: ${msg.path} (line ${msg.line || 1})`);
                 if (!this.monacoReady && typeof require !== 'undefined') {
                   this.pendingOpenFile = { path: msg.path, line: msg.line };
                 } else {
@@ -1081,6 +1271,7 @@
             }
           } catch (err) {
             console.error('[Editor IPC parse error]', err, data);
+            this.log('error', 'PARSE', `IPC 消息解析异常: ${err.message} (原始报文前100字: ${String(data).substring(0, 100)})`);
           }
         },
 
@@ -1657,6 +1848,30 @@
 
       document.getElementById('btn-refresh').addEventListener('click', () => {
         bridge.loadDirectory(bridge.currentDir);
+      });
+
+      document.getElementById('btn-logs')?.addEventListener('click', () => {
+        bridge.toggleLogModal();
+      });
+
+      document.getElementById('status-log-btn')?.addEventListener('click', () => {
+        bridge.toggleLogModal();
+      });
+
+      document.getElementById('btn-log-close')?.addEventListener('click', () => {
+        bridge.toggleLogModal(false);
+      });
+
+      document.getElementById('btn-log-clear')?.addEventListener('click', () => {
+        bridge.clearLogs();
+      });
+
+      document.getElementById('btn-log-copy')?.addEventListener('click', () => {
+        bridge.copyLogs();
+      });
+
+      document.getElementById('btn-log-fetch-host')?.addEventListener('click', () => {
+        bridge.fetchHostLogs();
       });
 
       document.getElementById('btn-tree-refresh').addEventListener('click', () => {

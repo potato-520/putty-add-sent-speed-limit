@@ -1297,6 +1297,26 @@ static void json_escape_string(const char *src, char *dst, size_t dst_sz)
     dst[j] = '\0';
 }
 
+static void json_escape_to_strbuf(strbuf *dst, const char *src)
+{
+    put_byte(dst, '"');
+    if (src) {
+        for (; *src; src++) {
+            unsigned char c = (unsigned char)*src;
+            if (c == '"') { put_data(dst, "\\\"", 2); }
+            else if (c == '\\') { put_data(dst, "\\\\", 2); }
+            else if (c == '\b') { put_data(dst, "\\b", 2); }
+            else if (c == '\f') { put_data(dst, "\\f", 2); }
+            else if (c == '\n') { put_data(dst, "\\n", 2); }
+            else if (c == '\r') { put_data(dst, "\\r", 2); }
+            else if (c == '\t') { put_data(dst, "\\t", 2); }
+            else if (c < 32) { put_fmt(dst, "\\u%04x", c); }
+            else { put_byte(dst, c); }
+        }
+    }
+    put_byte(dst, '"');
+}
+
 static void parse_auth_json(const char *json,
                             char *out_user, size_t user_sz,
                             char *out_pass, size_t pass_sz,
@@ -2336,8 +2356,7 @@ static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
     if (!ed || !ed->h_stdout_read) return 0;
 
     char buf[65536];
-    char line_buf[65536];
-    size_t line_len = 0;
+    strbuf *line_sb = strbuf_new_nm();
     DWORD bytes_read = 0;
     bool got_ready = false;
 
@@ -2351,35 +2370,35 @@ static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
             char ch = buf[i];
             if (ch == '\r') continue;
             if (ch == '\n') {
-                line_buf[line_len] = '\0';
-                if (line_len > 0) {
-                    if (line_buf[0] == '{') {
-                        if (strstr(line_buf, "\"sftp_ready\"")) {
+                if (line_sb->len > 0) {
+                    if (line_sb->s[0] == '{') {
+                        if (strstr(line_sb->s, "\"sftp_ready\"")) {
                             got_ready = true;
+                            dbg_log("sftp worker: received sftp_ready: %s", line_sb->s);
+                        } else {
+                            dbg_log("sftp worker: stdout json (len=%zu): %.120s...", line_sb->len, line_sb->s);
                         }
                         if (ed->hwnd && IsWindow(ed->hwnd)) {
-                            webview_host_send_to_window(ed->hwnd, line_buf);
+                            webview_host_send_to_window(ed->hwnd, line_sb->s);
                         }
                     } else {
-                        dbg_log("sftp worker non-json stdout: %s", line_buf);
+                        dbg_log("sftp worker non-json stdout: %s", line_sb->s);
                     }
                 }
-                line_len = 0;
+                strbuf_clear(line_sb);
             } else {
-                if (line_len < sizeof(line_buf) - 1) {
-                    line_buf[line_len++] = ch;
-                }
+                put_byte(line_sb, ch);
             }
         }
     }
 
-    if (line_len > 0 && line_buf[0] == '{' && ed->hwnd && IsWindow(ed->hwnd)) {
-        line_buf[line_len] = '\0';
-        if (strstr(line_buf, "\"sftp_ready\"")) {
+    if (line_sb->len > 0 && line_sb->s[0] == '{' && ed->hwnd && IsWindow(ed->hwnd)) {
+        if (strstr(line_sb->s, "\"sftp_ready\"")) {
             got_ready = true;
         }
-        webview_host_send_to_window(ed->hwnd, line_buf);
+        webview_host_send_to_window(ed->hwnd, line_sb->s);
     }
+    strbuf_free(line_sb);
 
     if (ed->temp_pwfile[0] != '\0') {
         DeleteFileA(ed->temp_pwfile);
@@ -2759,7 +2778,49 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
             DWORD written = 0;
             WriteFile(ed->h_stdin_write, message, (DWORD)strlen(message), &written, NULL);
             WriteFile(ed->h_stdin_write, "\n", 1, &written, NULL);
+            dbg_log("on_editor_web_message: forwarded SFTP cmd (len=%zu): %.100s...", strlen(message), message);
+        } else {
+            dbg_log("on_editor_web_message: WARNING: received SFTP cmd but worker is not ready! (worker_running=%d, h_stdin_write=%p)",
+                    ed->worker_running, (void*)ed->h_stdin_write);
+            char err_msg[256];
+            snprintf(err_msg, sizeof(err_msg),
+                     "{\"cmd\":\"sftp_error\",\"error\":\"SFTP 工作进程未就绪或已退出\"}");
+            webview_host_send_to_window(hwnd, err_msg);
         }
+        return;
+    }
+
+    if (strstr(message, "\"cmd\":\"get_host_log\"") || strstr(message, "\"cmd\": \"get_host_log\"")) {
+        char temp[MAX_PATH];
+        GetTempPathA(MAX_PATH, temp);
+        char logpath[MAX_PATH];
+        snprintf(logpath, sizeof(logpath), "%sputty_webview_debug.log", temp);
+
+        strbuf *log_sb = strbuf_new_nm();
+        FILE *f = fopen(logpath, "r");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsz = ftell(f);
+            long read_offset = (fsz > 64 * 1024) ? (fsz - 64 * 1024) : 0;
+            fseek(f, read_offset, SEEK_SET);
+
+            char line[1024];
+            while (fgets(line, sizeof(line), f)) {
+                put_data(log_sb, line, strlen(line));
+            }
+            fclose(f);
+        } else {
+            const char *notfound = "(未找到宿主日志文件)\n";
+            put_data(log_sb, notfound, strlen(notfound));
+        }
+
+        strbuf *resp = strbuf_new_nm();
+        put_fmt(resp, "{\"cmd\":\"host_log_resp\",\"content\":");
+        json_escape_to_strbuf(resp, log_sb->s);
+        put_data(resp, "}\n", 2);
+        webview_host_send_to_window(hwnd, resp->s);
+        strbuf_free(log_sb);
+        strbuf_free(resp);
         return;
     }
 
