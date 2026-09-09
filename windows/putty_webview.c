@@ -43,6 +43,7 @@ typedef struct WebViewWindow {
 
 static WebViewWindow *windows_head = NULL;
 static wchar_t global_html_path[MAX_PATH] = {0};
+static wchar_t global_editor_html_path[MAX_PATH] = {0};
 static wchar_t target_web_dir[MAX_PATH] = {0};
 
 static void dbg_log(const char *fmt, ...)
@@ -70,6 +71,7 @@ static void dbg_log(const char *fmt, ...)
 #define IDR_WEB_XTERM_CSS           2003
 #define IDR_WEB_FIT_ADDON_JS        2004
 #define IDR_WEB_WEBLINKS_ADDON_JS   2005
+#define IDR_WEB_EDITOR_HTML         2006
 
 struct EmbeddedAsset {
     const wchar_t *filename;
@@ -82,6 +84,7 @@ static const struct EmbeddedAsset embedded_assets[] = {
     { L"xterm.css", IDR_WEB_XTERM_CSS },
     { L"xterm-addon-fit.js", IDR_WEB_FIT_ADDON_JS },
     { L"xterm-addon-web-links.js", IDR_WEB_WEBLINKS_ADDON_JS },
+    { L"editor.html", IDR_WEB_EDITOR_HTML },
 };
 #define NUM_EMBEDDED_ASSETS (sizeof(embedded_assets) / sizeof(embedded_assets[0]))
 
@@ -120,7 +123,7 @@ static bool create_directory_recursive(const wchar_t *dir)
     return CreateDirectoryW(tmp, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-static void ensure_webview_assets(wchar_t *out_html_path, size_t max_len)
+static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_path, size_t max_len)
 {
     wchar_t exe_path[MAX_PATH];
     GetModuleFileNameW(NULL, exe_path, MAX_PATH);
@@ -133,12 +136,14 @@ static void ensure_webview_assets(wchar_t *out_html_path, size_t max_len)
     if (GetFileAttributesW(dev_html) != INVALID_FILE_ATTRIBUTES) {
         wcsncpy(out_html_path, dev_html, max_len - 1);
         out_html_path[max_len - 1] = L'\0';
+        _snwprintf(out_editor_path, max_len, L"%s\\..\\..\\windows\\webview\\web\\editor.html", exe_path);
         return;
     }
 
     /* 2. Deployed standalone mode: ensure target directory exists */
     _snwprintf(target_web_dir, MAX_PATH, L"%s\\webview\\web", exe_path);
     _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
+    _snwprintf(out_editor_path, max_len, L"%s\\editor.html", target_web_dir);
 
     bool dir_ok = create_directory_recursive(target_web_dir);
     if (!dir_ok) {
@@ -148,6 +153,7 @@ static void ensure_webview_assets(wchar_t *out_html_path, size_t max_len)
             _snwprintf(target_web_dir, MAX_PATH, L"%s\\PuTTY-WebView\\webview\\web", appdata);
             create_directory_recursive(target_web_dir);
             _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
+            _snwprintf(out_editor_path, max_len, L"%s\\editor.html", target_web_dir);
         }
     }
 
@@ -2272,6 +2278,197 @@ static void url_decode(char *dst, const char *src)
     *dst = '\0';
 }
 
+typedef struct WebViewEditorWindow {
+    HWND hwnd;
+    int session_id;
+    char session_name[128];
+    char remote_host[128];
+    bool is_ready;
+    char pending_file[MAX_PATH * 2];
+    int pending_line;
+    struct WebViewEditorWindow *next;
+} WebViewEditorWindow;
+
+static WebViewEditorWindow *editor_windows_head = NULL;
+
+static WebViewEditorWindow *editor_window_find_by_session(int session_id)
+{
+    for (WebViewEditorWindow *ed = editor_windows_head; ed; ed = ed->next) {
+        if (ed->session_id == session_id)
+            return ed;
+    }
+    return NULL;
+}
+
+static WebViewEditorWindow *editor_window_find_by_hwnd(HWND hwnd)
+{
+    for (WebViewEditorWindow *ed = editor_windows_head; ed; ed = ed->next) {
+        if (ed->hwnd == hwnd)
+            return ed;
+    }
+    return NULL;
+}
+
+static void editor_window_destroy(HWND hwnd)
+{
+    dbg_log("editor_window_destroy: closing editor window %p", (void*)hwnd);
+    WebViewEditorWindow **pp = &editor_windows_head;
+    while (*pp) {
+        if ((*pp)->hwnd == hwnd) {
+            WebViewEditorWindow *to_free = *pp;
+            *pp = (*pp)->next;
+            webview_host_close(hwnd);
+            sfree(to_free);
+            dbg_log("editor_window_destroy: editor window %p destroyed and unlinked", (void*)hwnd);
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+static void editor_window_close_for_session(int session_id)
+{
+    WebViewEditorWindow *ed = editor_window_find_by_session(session_id);
+    if (ed && ed->hwnd && IsWindow(ed->hwnd)) {
+        dbg_log("editor_window_close_for_session: destroying editor window for session %d", session_id);
+        DestroyWindow(ed->hwnd);
+    }
+}
+
+static void on_editor_web_message(HWND hwnd, const char *message, void *userdata)
+{
+    if (!message || !*message) return;
+    dbg_log("on_editor_web_message: hwnd=%p, msg='%s'", (void*)hwnd, message);
+
+    WebViewEditorWindow *ed = editor_window_find_by_hwnd(hwnd);
+    if (!ed) return;
+
+    if (strstr(message, "\"cmd\":\"editor_init\"") || strstr(message, "\"cmd\": \"editor_init\"")) {
+        ed->is_ready = true;
+        char resp[512];
+        snprintf(resp, sizeof(resp),
+                 "{\"cmd\":\"editor_init_ack\",\"sessionId\":%d,\"sessionName\":\"%s\",\"host\":\"%s\"}",
+                 ed->session_id, ed->session_name, ed->remote_host);
+        webview_host_send_to_window(hwnd, resp);
+
+        if (ed->pending_file[0]) {
+            char open_cmd[MAX_PATH * 2 + 64];
+            snprintf(open_cmd, sizeof(open_cmd),
+                     "{\"cmd\":\"open_file\",\"path\":\"%s\",\"line\":%d}",
+                     ed->pending_file, ed->pending_line);
+            webview_host_send_to_window(hwnd, open_cmd);
+            ed->pending_file[0] = '\0';
+            ed->pending_line = 0;
+        }
+        return;
+    }
+
+    if (strstr(message, "\"cmd\":\"ping\"") || strstr(message, "\"cmd\": \"ping\"")) {
+        webview_host_send_to_window(hwnd, "{\"cmd\":\"pong\"}");
+        return;
+    }
+
+    if (strstr(message, "\"cmd\":\"close\"") || strstr(message, "\"cmd\": \"close\"")) {
+        PostMessage(hwnd, WM_CLOSE, 0, 0);
+        return;
+    }
+}
+
+static LRESULT CALLBACK WebViewEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_SIZE:
+        webview_host_resize(hwnd);
+        return 0;
+    case WM_SETFOCUS:
+        webview_host_focus(hwnd);
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) != WA_INACTIVE) {
+            webview_host_focus(hwnd);
+        }
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        editor_window_destroy(hwnd);
+        return 0;
+    default:
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+}
+
+static HWND editor_window_open(int session_id, const char *initial_file, int initial_line)
+{
+    WebViewSession *sess = session_find(session_id);
+    if (!sess) {
+        dbg_log("editor_window_open: session %d not found", session_id);
+        return NULL;
+    }
+
+    WebViewEditorWindow *ed = editor_window_find_by_session(session_id);
+    if (ed && ed->hwnd && IsWindow(ed->hwnd)) {
+        dbg_log("editor_window_open: activating existing editor window for session %d", session_id);
+        ShowWindow(ed->hwnd, SW_RESTORE);
+        SetForegroundWindow(ed->hwnd);
+        webview_host_focus(ed->hwnd);
+
+        if (initial_file && *initial_file) {
+            if (ed->is_ready) {
+                char open_cmd[MAX_PATH * 2 + 64];
+                snprintf(open_cmd, sizeof(open_cmd),
+                         "{\"cmd\":\"open_file\",\"path\":\"%s\",\"line\":%d}",
+                         initial_file, initial_line);
+                webview_host_send_to_window(ed->hwnd, open_cmd);
+            } else {
+                strncpy(ed->pending_file, initial_file, sizeof(ed->pending_file) - 1);
+                ed->pending_line = initial_line;
+            }
+        }
+        return ed->hwnd;
+    }
+
+    char title[256];
+    const char *h = conf_get_str(sess->cfg, CONF_host);
+    snprintf(title, sizeof(title), "PuTTY Remote Editor - %s [%s]",
+             sess->name, (h && *h) ? h : "Remote");
+
+    HWND hwnd = CreateWindowEx(
+        WS_EX_APPWINDOW,
+        "PuTTYWebViewEditorClass",
+        title,
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1024, 680,
+        NULL, NULL, hinst, NULL
+    );
+    if (!hwnd) {
+        dbg_log("editor_window_open: CreateWindowEx failed");
+        return NULL;
+    }
+
+    ed = snew(WebViewEditorWindow);
+    memset(ed, 0, sizeof(*ed));
+    ed->hwnd = hwnd;
+    ed->session_id = session_id;
+    strncpy(ed->session_name, sess->name, sizeof(ed->session_name) - 1);
+    if (h && *h) strncpy(ed->remote_host, h, sizeof(ed->remote_host) - 1);
+    if (initial_file && *initial_file) {
+        strncpy(ed->pending_file, initial_file, sizeof(ed->pending_file) - 1);
+        ed->pending_line = initial_line;
+    }
+
+    ed->next = editor_windows_head;
+    editor_windows_head = ed;
+
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+    dbg_log("editor_window_open: initializing WebView2 with '%ls'", global_editor_html_path);
+    webview_host_init(hwnd, global_editor_html_path, on_editor_web_message, NULL);
+    return hwnd;
+}
+
 static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
 {
     if (!input || !*input)
@@ -2370,6 +2567,15 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
     }
 
     WebViewSession *sess = session_find(sess_id);
+
+    /* Check if this is an SSH session - route to independent SFTP Editor window! */
+    if (sess && sess->cfg && conf_get_int(sess->cfg, CONF_protocol) == PROT_SSH) {
+        dbg_log("open_url_or_file: SSH remote session %d, routing to SFTP Editor window: '%s', line=%d",
+                sess_id, p, line);
+        editor_window_open(sess_id, p, line);
+        return;
+    }
+
     char distro[128] = {0};
     get_session_wsl_distro(sess, distro, sizeof(distro));
 
@@ -2592,6 +2798,7 @@ static void session_close(int id)
             conf_free(target->cfg);
             target->cfg = NULL;
         }
+        editor_window_close_for_session(id);
         sfree(target);
 
         if (win_hwnd) {
@@ -2926,6 +3133,9 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
         } else if (strstr(payload, ":clone")) {
             int sess_id = atoi(payload);
             session_clone(hwnd, sess_id);
+        } else if (strstr(payload, ":open_editor")) {
+            int sess_id = atoi(payload);
+            editor_window_open(sess_id, NULL, 0);
         } else if (strstr(payload, ":detach")) {
             int sess_id = 0, screen_x = 0, screen_y = 0;
             if (sscanf(payload, "%d:detach:%d:%d", &sess_id, &screen_x, &screen_y) >= 1) {
@@ -3251,6 +3461,19 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     wc.lpszClassName = "PuTTYWebViewHostClass";
     RegisterClassEx(&wc);
 
+    /* Register Editor Host Window Class */
+    WNDCLASSEX wc_ed;
+    memset(&wc_ed, 0, sizeof(wc_ed));
+    wc_ed.cbSize = sizeof(wc_ed);
+    wc_ed.style = CS_HREDRAW | CS_VREDRAW;
+    wc_ed.lpfnWndProc = WebViewEditorWndProc;
+    wc_ed.hInstance = hinst;
+    wc_ed.hIcon = LoadIcon(hinst, MAKEINTRESOURCE(IDI_MAINICON));
+    wc_ed.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc_ed.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    wc_ed.lpszClassName = "PuTTYWebViewEditorClass";
+    RegisterClassEx(&wc_ed);
+
     char title[128];
     const char *h = conf_get_str(cfg, CONF_host);
     int proto = conf_get_int(cfg, CONF_protocol);
@@ -3278,7 +3501,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     }
 
     /* Ensure web assets: load existing immediately or extract if missing */
-    ensure_webview_assets(global_html_path, MAX_PATH);
+    ensure_webview_assets(global_html_path, global_editor_html_path, MAX_PATH);
 
     /* Create hidden message-only window for network socket events */
     HWND sock_hwnd = CreateWindowEx(

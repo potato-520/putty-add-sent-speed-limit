@@ -19,10 +19,12 @@ IDI_CFGICON ICON "puttycfg.ico"
 #define IDR_WEB_XTERM_CSS           2003
 #define IDR_WEB_FIT_ADDON_JS        2004
 #define IDR_WEB_WEBLINKS_ADDON_JS   2005
+#define IDR_WEB_EDITOR_HTML         2006
 
 IDR_WEB_INDEX_HTML          RCDATA "webview/web/index.html"
 IDR_WEB_XTERM_JS            RCDATA "webview/web/xterm.js"
 IDR_WEB_XTERM_CSS           RCDATA "webview/web/xterm.css"
 IDR_WEB_FIT_ADDON_JS        RCDATA "webview/web/xterm-addon-fit.js"
 IDR_WEB_WEBLINKS_ADDON_JS   RCDATA "webview/web/xterm-addon-web-links.js"
+IDR_WEB_EDITOR_HTML         RCDATA "webview/web/editor.html"
 

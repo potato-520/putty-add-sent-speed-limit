@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PuTTY Remote File Editor</title>
+  <style>
+    :root {
+      --bg-main: #1e1e1e;
+      --bg-sidebar: #252526;
+      --bg-header: #323233;
+      --bg-tab-bar: #252526;
+      --bg-tab: #2d2d2d;
+      --bg-tab-active: #1e1e1e;
+      --bg-tab-hover: #2a2d2e;
+      --border-color: #3e3e42;
+      --text-main: #cccccc;
+      --text-muted: #858585;
+      --text-active: #ffffff;
+      --accent: #007acc;
+      --accent-hover: #1f8ad2;
+      --dirty-dot: #e5c07b;
+      --status-bg: #007acc;
+      --status-fg: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      color: var(--text-main);
+      background-color: var(--bg-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top App Bar */
+    #top-bar {
+      height: 38px;
+      background-color: var(--bg-header);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .top-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .app-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .session-badge {
+      background: rgba(0, 122, 204, 0.25);
+      border: 1px solid rgba(0, 122, 204, 0.5);
+      color: #61afef;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      font-family: Consolas, monospace;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-action {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-main);
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .btn-action:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--border-color);
+      color: #fff;
+    }
+
+    .btn-action:active {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Main Container */
+    #main-container {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Left Sidebar: File Tree */
+    #sidebar {
+      width: 240px;
+      min-width: 160px;
+      max-width: 500px;
+      background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header {
+      height: 32px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .sidebar-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .sidebar-icon-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+
+    .sidebar-icon-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    #file-tree-container {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 6px 0;
+    }
+
+    .tree-node {
+      padding: 4px 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: var(--text-main);
+      font-size: 12.5px;
+      white-space: nowrap;
+    }
+
+    .tree-node:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .tree-node.active {
+      background-color: rgba(0, 122, 204, 0.3);
+      color: #fff;
+    }
+
+    .node-icon {
+      font-size: 13px;
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* Sidebar Resizer */
+    #sidebar-resizer {
+      width: 4px;
+      cursor: col-resize;
+      background: transparent;
+      transition: background 0.15s;
+    }
+
+    #sidebar-resizer:hover, #sidebar-resizer.resizing {
+      background: var(--accent);
+    }
+
+    /* Right Main: Editor & Tabs */
+    #editor-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background-color: var(--bg-main);
+    }
+
+    /* Tab Bar */
+    #tab-bar {
+      height: 35px;
+      background-color: var(--bg-tab-bar);
+      display: flex;
+      align-items: flex-end;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    #tab-bar::-webkit-scrollbar {
+      height: 3px;
+    }
+    #tab-bar::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .tab-item {
+      height: 34px;
+      padding: 0 12px;
+      background-color: var(--bg-tab);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 12.5px;
+      position: relative;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .tab-item:hover {
+      background-color: var(--bg-tab-hover);
+      color: var(--text-main);
+    }
+
+    .tab-item.active {
+      background-color: var(--bg-tab-active);
+      color: var(--text-active);
+      border-top: 2px solid var(--accent);
+    }
+
+    .tab-item.pinned .tab-pin-icon {
+      display: inline-block;
+      font-size: 11px;
+      opacity: 0.7;
+    }
+
+    .tab-pin-icon {
+      display: none;
+    }
+
+    .tab-dirty-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--dirty-dot);
+      display: none;
+    }
+
+    .tab-item.dirty .tab-dirty-indicator {
+      display: block;
+    }
+
+    .tab-close-btn {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 3px;
+      font-size: 13px;
+      line-height: 1;
+      opacity: 0.6;
+    }
+
+    .tab-close-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      opacity: 1;
+    }
+
+    /* Editor Viewport */
+    #editor-viewport {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      gap: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .empty-icon {
+      font-size: 48px;
+      opacity: 0.35;
+    }
+
+    .empty-title {
+      font-size: 16px;
+      font-weight: 500;
+      color: #aaa;
+    }
+
+    .empty-hint {
+      font-size: 12.5px;
+      max-width: 360px;
+      line-height: 1.5;
+    }
+
+    .monaco-placeholder {
+      display: none;
+      flex: 1;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13.5px;
+      padding: 16px;
+      overflow: auto;
+      white-space: pre;
+      line-height: 1.45;
+    }
+
+    /* Bottom Status Bar */
+    #status-bar {
+      height: 22px;
+      background-color: var(--status-bg);
+      color: var(--status-fg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .status-left, .status-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top App Bar -->
+  <div id="top-bar">
+    <div class="top-left">
+      <div class="app-title">
+        <span>📑</span> PuTTY SFTP Remote Editor
+      </div>
+      <div id="session-badge" class="session-badge">Session --</div>
+    </div>
+    <div class="top-actions">
+      <button class="btn-action" id="btn-refresh" title="刷新文件列表">🔄 刷新</button>
+      <button class="btn-action" id="btn-new" title="新建文件">📄 新建</button>
+      <button class="btn-action" id="btn-close" title="关闭窗口">✕ 关闭</button>
+    </div>
+  </div>
+
+  <!-- Main Work Area -->
+  <div id="main-container">
+    <!-- Left Sidebar: Remote File Tree -->
+    <div id="sidebar">
+      <div class="sidebar-header">
+        <span id="explorer-root">远程资源管理器 (/)</span>
+        <div class="sidebar-actions">
+          <button class="sidebar-icon-btn" id="btn-tree-refresh" title="刷新">🔄</button>
+        </div>
+      </div>
+      <div id="file-tree-container">
+        <div class="tree-node active">
+          <span class="node-icon">📁</span>
+          <span>加载中... (Waiting for SFTP connection)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar Resizer -->
+    <div id="sidebar-resizer"></div>
+
+    <!-- Right Main Area: Tabs + Editor -->
+    <div id="editor-container">
+      <!-- Tabs -->
+      <div id="tab-bar">
+        <!-- Tab items injected here -->
+      </div>
+
+      <!-- Editor Viewport -->
+      <div id="editor-viewport">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">📁</div>
+          <div class="empty-title">独立 SFTP 文件浏览器与编辑器就绪</div>
+          <div class="empty-hint">
+            从左侧文件树选择文件，或在主终端中点击 <code>file:///...</code> 链接以自动在此窗口打开并定位。
+          </div>
+        </div>
+
+        <div id="monaco-placeholder" class="monaco-placeholder">
+          <!-- Text view scaffold for M2/M3, Monaco Editor mounts here in M4 -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Bar -->
+  <div id="status-bar">
+    <div class="status-left">
+      <div class="status-item" id="status-conn">● 已连接宿主 (Connected to Host)</div>
+      <div class="status-item" id="status-path">/</div>
+    </div>
+    <div class="status-right">
+      <div class="status-item" id="status-pos">Ln 1, Col 1</div>
+      <div class="status-item" id="status-encoding">UTF-8</div>
+      <div class="status-item" id="status-lang">Plain Text</div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // 1. WebMessage IPC Infrastructure
+      const bridge = {
+        sessionId: 0,
+        sessionName: '',
+        host: '',
+        openFiles: [],
+        activeFile: null,
+
+        send(obj) {
+          if (window.chrome && window.chrome.webview) {
+            const str = (typeof obj === 'string') ? obj : JSON.stringify(obj);
+            window.chrome.webview.postMessage(str);
+          }
+        },
+
+        init() {
+          // Send handshake to C host
+          this.send({ cmd: 'editor_init' });
+
+          // Listen for messages from C host
+          if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.addEventListener('message', e => {
+              this.onMessage(e.data);
+            });
+          }
+        },
+
+        onMessage(data) {
+          try {
+            const msg = (typeof data === 'string') ? JSON.parse(data) : data;
+            console.log('[Editor IPC Recv]', msg);
+            switch (msg.cmd) {
+              case 'editor_init_ack':
+                this.sessionId = msg.sessionId || 0;
+                this.sessionName = msg.sessionName || 'Session';
+                this.host = msg.host || '';
+                document.getElementById('session-badge').textContent = `${this.sessionName} (${this.host})`;
+                document.getElementById('status-conn').textContent = `● SFTP 宿主已联通 (${this.host})`;
+                break;
+
+              case 'open_file':
+                this.handleOpenFile(msg.path, msg.line);
+                break;
+
+              case 'status_msg':
+                document.getElementById('status-conn').textContent = msg.text || '';
+                break;
+
+              case 'pong':
+                console.log('Pong received from C host');
+                break;
+            }
+          } catch (err) {
+            console.error('[Editor IPC parse error]', err, data);
+          }
+        },
+
+        handleOpenFile(path, line) {
+          if (!path) return;
+          console.log('[Editor] Open file requested:', path, 'Line:', line);
+          document.getElementById('empty-state').style.display = 'none';
+          const ph = document.getElementById('monaco-placeholder');
+          ph.style.display = 'block';
+          ph.textContent = `// [Scaffold View] File: ${path}\n// Target Line: ${line || 1}\n// (Monaco Editor full syntax highlighting & edit engine will mount here in Milestone 4)`;
+          document.getElementById('status-path').textContent = path;
+          if (line > 0) {
+            document.getElementById('status-pos').textContent = `Ln ${line}, Col 1`;
+          }
+
+          // Render / update Tab
+          this.addTab(path);
+        },
+
+        addTab(path) {
+          const tabBar = document.getElementById('tab-bar');
+          const basename = path.split('/').pop() || path;
+          
+          // Clear active tabs
+          Array.from(tabBar.children).forEach(t => t.classList.remove('active'));
+
+          let existingTab = Array.from(tabBar.children).find(t => t.dataset.path === path);
+          if (existingTab) {
+            existingTab.classList.add('active');
+            return;
+          }
+
+          const tab = document.createElement('div');
+          tab.className = 'tab-item active';
+          tab.dataset.path = path;
+          tab.innerHTML = `
+            <span class="tab-pin-icon">📌</span>
+            <span>${basename}</span>
+            <span class="tab-dirty-indicator"></span>
+            <span class="tab-close-btn" title="关闭">✕</span>
+          `;
+
+          tab.addEventListener('click', (e) => {
+            if (e.target.classList.contains('tab-close-btn')) {
+              tab.remove();
+              if (tabBar.children.length === 0) {
+                document.getElementById('empty-state').style.display = 'flex';
+                document.getElementById('monaco-placeholder').style.display = 'none';
+              } else {
+                tabBar.lastElementChild.click();
+              }
+              return;
+            }
+            Array.from(tabBar.children).forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('status-path').textContent = path;
+          });
+
+          // Double click to Pin Tab
+          tab.addEventListener('dblclick', () => {
+            tab.classList.toggle('pinned');
+          });
+
+          tabBar.appendChild(tab);
+        }
+      };
+
+      // 2. UI Action Bindings
+      document.getElementById('btn-close').addEventListener('click', () => {
+        bridge.send({ cmd: 'close' });
+      });
+
+      document.getElementById('btn-refresh').addEventListener('click', () => {
+        bridge.send({ cmd: 'ping' });
+      });
+
+      // 3. Resizer Drag Logic
+      const resizer = document.getElementById('sidebar-resizer');
+      const sidebar = document.getElementById('sidebar');
+      let isResizing = false;
+
+      resizer.addEventListener('mousedown', e => {
+        isResizing = true;
+        resizer.classList.add('resizing');
+        document.body.style.cursor = 'col-resize';
+      });
+
+      window.addEventListener('mousemove', e => {
+        if (!isResizing) return;
+        const newWidth = Math.max(160, Math.min(500, e.clientX));
+        sidebar.style.width = newWidth + 'px';
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (isResizing) {
+          isResizing = false;
+          resizer.classList.remove('resizing');
+          document.body.style.cursor = 'default';
+        }
+      });
+
+      // Expose globally
+      window.EditorBridge = bridge;
+
+      // Start Handshake
+      window.addEventListener('DOMContentLoaded', () => {
+        bridge.init();
+      });
+    })();
+  </script>
+</body>
+</html>

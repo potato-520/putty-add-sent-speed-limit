@@ -820,6 +820,9 @@
     <div class="menu-item" data-action="toggle-log">
       <span id="ctx-log-icon">▶</span> <span id="ctx-log-text">录制会话日志 (Record Log)</span>
     </div>
+    <div class="menu-item" data-action="open-editor">
+      <span>📂</span> 远程文件与编辑器 (SFTP Editor)
+    </div>
     <div class="menu-item" data-action="open-mle">
       <span>📝</span> 多行文本编辑器 (Ctrl+单击终端)
     </div>
@@ -1222,8 +1225,23 @@
           sendToHost('3', 'new_tab');
         });
 
+        const btnOpenEditor = document.createElement('button');
+        btnOpenEditor.tabIndex = -1;
+        btnOpenEditor.className = 'btn-group-action btn-open-editor';
+        btnOpenEditor.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
+        btnOpenEditor.title = '远程文件与编辑器 (SFTP Editor)';
+        btnOpenEditor.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const g = this.groups[gid];
+          const sid = (g && g.activeSessionId) ? g.activeSessionId : activeGlobalSessionId;
+          if (sid) {
+            sendToHost('3', `${sid}:open_editor`);
+          }
+        });
+
         actionsEl.appendChild(btnRecordLog);
         actionsEl.appendChild(btnAutoReconnect);
+        actionsEl.appendChild(btnOpenEditor);
         actionsEl.appendChild(btnToolbox);
         actionsEl.appendChild(btnNewTab);
 
@@ -2363,6 +2381,8 @@
 
       if (action === 'toggle-log') {
         sendToHost('3', `${targetId}:toggle_log`);
+      } else if (action === 'open-editor') {
+        sendToHost('3', `${targetId}:open_editor`);
       } else if (action === 'open-mle') {
         openMultiLineEditor(targetId);
       } else if (action === 'clone') {
