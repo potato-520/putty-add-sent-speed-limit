@@ -54,6 +54,9 @@ static void dbg_log(const char *fmt, ...)
 
     FILE *f = fopen(logpath, "a");
     if (!f) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
     va_list ap;
     va_start(ap, fmt);
     vfprintf(f, fmt, ap);

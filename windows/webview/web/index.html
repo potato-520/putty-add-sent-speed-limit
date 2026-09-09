@@ -1029,6 +1029,8 @@
 
     const sessions = {}; // id -> { id, title, term, fitAddon, viewEl, tabEl, titleEl, dotEl, connected, groupId }
     let activeGlobalSessionId = null;
+    let sshAuthActiveSessionId = null;
+    let mleActiveSessionId = null;
     let contextMenuTargetId = null;
     const contextMenuEl = document.getElementById('tab-context-menu');
     const toolboxMenuEl = document.getElementById('toolbox-menu');
@@ -2096,47 +2098,79 @@
     function removeSessionTab(id) {
       if (!sessions[id]) return;
 
-      if (typeof closeSshAuthModal === 'function' && sshAuthActiveSessionId === id) {
-        closeSshAuthModal(false);
+      const cur = sessions[id];
+      const gid = cur ? cur.groupId : null;
+
+      // 1. Immediately remove tab element and terminal view element from DOM
+      try {
+        if (cur && cur.tabEl) {
+          cur.tabEl.remove();
+        }
+      } catch (e) {
+        console.error('Failed to remove tabEl:', e);
+      }
+      try {
+        if (cur && cur.viewEl) {
+          cur.viewEl.remove();
+        }
+      } catch (e) {
+        console.error('Failed to remove viewEl:', e);
       }
 
-      const cur = sessions[id];
-      const gid = cur.groupId;
-
-      try {
-        cur.term.dispose();
-      } catch (e) {}
-
-      cur.tabEl.remove();
-      cur.viewEl.remove();
+      // 2. Delete session from dictionary
       delete sessions[id];
 
-      if (gid && dockManager.groups[gid]) {
-        const g = dockManager.groups[gid];
-        g.sessionIds = g.sessionIds.filter(x => x !== id);
-        if (g.activeSessionId === id) {
-          if (g.sessionIds.length > 0) {
-            dockManager.switchGroupTab(gid, g.sessionIds[g.sessionIds.length - 1]);
-          } else {
-            g.activeSessionId = null;
-          }
+      // 3. Dispose terminal instance
+      try {
+        if (cur && cur.term) {
+          cur.term.dispose();
         }
-        dockManager.checkAndCleanupGroup(gid);
+      } catch (e) {}
+
+      // 4. Close SSH auth modal if this session had an open modal
+      try {
+        if (typeof closeSshAuthModal === 'function' && typeof sshAuthActiveSessionId !== 'undefined' && sshAuthActiveSessionId === id) {
+          closeSshAuthModal(false);
+        }
+      } catch (e) {
+        console.error('Failed to close SSH modal for session:', e);
       }
 
-      // If the closed tab was global active session, focus remaining active session
-      if (activeGlobalSessionId === id) {
-        const remainingIds = Object.keys(sessions);
-        if (remainingIds.length > 0) {
-          const nextId = parseInt(remainingIds[remainingIds.length - 1], 10);
-          const nextSess = sessions[nextId];
-          if (nextSess && nextSess.groupId) {
-            dockManager.switchGroupTab(nextSess.groupId, nextId);
+      // 5. Update dock group tabs
+      try {
+        if (gid && dockManager && dockManager.groups && dockManager.groups[gid]) {
+          const g = dockManager.groups[gid];
+          g.sessionIds = g.sessionIds.filter(x => x !== id);
+          if (g.activeSessionId === id) {
+            if (g.sessionIds.length > 0) {
+              dockManager.switchGroupTab(gid, g.sessionIds[g.sessionIds.length - 1]);
+            } else {
+              g.activeSessionId = null;
+            }
           }
-        } else {
-          activeGlobalSessionId = null;
-          document.title = 'PuTTY-WebView';
+          dockManager.checkAndCleanupGroup(gid);
         }
+      } catch (e) {
+        console.error('Failed to cleanup dock group:', e);
+      }
+
+      // 6. If the closed tab was global active session, switch to remaining active session
+      try {
+        if (activeGlobalSessionId === id) {
+          const remainingIds = Object.keys(sessions);
+          if (remainingIds.length > 0) {
+            const nextId = parseInt(remainingIds[remainingIds.length - 1], 10);
+            const nextSess = sessions[nextId];
+            if (nextSess && nextSess.groupId) {
+              dockManager.switchGroupTab(nextSess.groupId, nextId);
+            }
+          } else {
+            activeGlobalSessionId = null;
+            document.title = 'PuTTY-WebView';
+          }
+        }
+      } catch (e) {
+        console.error('Failed to update active session after tab removal:', e);
       }
     }
 
@@ -2386,7 +2420,7 @@
       });
 
       // Multi-line Text Editor Logic (Independent Floating Window)
-      let mleActiveSessionId = null;
+      mleActiveSessionId = null;
       let mleDialogPos = null; // { left, top, width, height }
       const mleModalEl = document.getElementById('mle-modal');
       const mleDialogEl = document.querySelector('.mle-dialog');
@@ -2668,7 +2702,7 @@
       if (mleSendBtn) mleSendBtn.addEventListener('click', sendMultiLineText);
 
       // SSH Authentication Modal Logic
-      let sshAuthActiveSessionId = null;
+      sshAuthActiveSessionId = null;
       let sshAuthUsers = {};
       let sshAuthCountdownTimer = null;
       let sshAuthCountdownRemaining = 5;
