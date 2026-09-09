@@ -3047,6 +3047,8 @@ static bool pick_folder_modern(HWND hwnd, const wchar_t *title, wchar_t *out_dir
     bool success = false;
     IFileOpenDialog *pfd = NULL;
 
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
     static const CLSID clsid_FileOpenDialog =
         {0xDC1C5A9C, 0xE88A, 0x4dde, {0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}};
     static const IID iid_IFileOpenDialog =
@@ -3082,17 +3084,7 @@ static bool pick_folder_modern(HWND hwnd, const wchar_t *title, wchar_t *out_dir
         }
         pfd->lpVtbl->Release(pfd);
     } else {
-        BROWSEINFOW bi = {0};
-        bi.hwndOwner = hwnd;
-        bi.lpszTitle = title ? title : L"选择保存目标文件夹";
-        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
-        PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
-        if (pidl) {
-            if (SHGetPathFromIDListW(pidl, out_dir)) {
-                success = true;
-            }
-            CoTaskMemFree(pidl);
-        }
+        dbg_log("pick_folder_modern: CoCreateInstance(IFileOpenDialog) failed hr=0x%08lx", hr);
     }
     return success;
 }
