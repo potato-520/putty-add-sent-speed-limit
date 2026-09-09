@@ -1058,8 +1058,219 @@
     .btn-action.btn-preview:hover {
       background-color: #2ea043;
     }
-    .btn-action.btn-preview.active {
-      background-color: #d97706;
+    /* Open Remote Path Modal Dialog */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      opacity: 1;
+      transition: opacity 0.15s ease;
+    }
+    .modal-overlay.hidden {
+      display: none !important;
+    }
+    .modal-dialog {
+      width: 520px;
+      max-width: calc(100vw - 32px);
+      background: #1e1e24;
+      border: 1px solid #3c3c46;
+      border-radius: 8px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: modalSlideIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes modalSlideIn {
+      from { transform: translateY(-16px) scale(0.97); opacity: 0; }
+      to { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    .modal-header {
+      height: 38px;
+      background: #25252c;
+      border-bottom: 1px solid #33333d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      font-weight: 600;
+      font-size: 12.5px;
+      color: #e6e6e6;
+    }
+    .modal-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .modal-close-btn {
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 14px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: all 0.15s;
+    }
+    .modal-close-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+    .modal-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #1c1c22;
+    }
+    .modal-desc {
+      font-size: 12px;
+      color: #abb2bf;
+      line-height: 1.5;
+    }
+    .modal-desc code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: #e5c07b;
+      font-family: Consolas, monospace;
+    }
+    .modal-input-wrap {
+      position: relative;
+      width: 100%;
+    }
+    .modal-input {
+      width: 100%;
+      height: 34px;
+      background: #141418;
+      border: 1px solid #434552;
+      border-radius: 5px;
+      color: #e6e6e6;
+      padding: 0 10px;
+      font-size: 13px;
+      font-family: Consolas, "Courier New", monospace;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .modal-input:focus {
+      border-color: #61afef;
+      box-shadow: 0 0 0 2px rgba(97, 175, 239, 0.25);
+    }
+    .modal-quick-chips {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .chip-label {
+      font-size: 11px;
+      color: #7f848e;
+    }
+    .quick-chip {
+      background: #252830;
+      border: 1px solid #3c404b;
+      color: #abb2bf;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-chip:hover {
+      background: #343a46;
+      color: #61afef;
+      border-color: #61afef;
+    }
+    .modal-status {
+      font-size: 11.5px;
+      padding: 7px 10px;
+      border-radius: 4px;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+    .modal-status.loading {
+      background: rgba(97, 175, 239, 0.12);
+      color: #61afef;
+      border: 1px solid rgba(97, 175, 239, 0.28);
+    }
+    .modal-status.error {
+      background: rgba(224, 108, 117, 0.12);
+      color: #e06c75;
+      border: 1px solid rgba(224, 108, 117, 0.28);
+    }
+    .modal-status.success {
+      background: rgba(152, 195, 121, 0.12);
+      color: #98c379;
+      border: 1px solid rgba(152, 195, 121, 0.28);
+    }
+    .modal-status.hidden {
+      display: none !important;
+    }
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #25252c;
+      border-top: 1px solid #33333d;
+    }
+    .modal-footer-hint {
+      font-size: 11px;
+      color: #7f848e;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .modal-footer-hint kbd {
+      background: #1c1c22;
+      border: 1px solid #434552;
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 10px;
+      color: #abb2bf;
+      font-family: inherit;
+    }
+    .modal-footer-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    .modal-btn {
+      padding: 5px 14px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .modal-btn-secondary {
+      background: #2c313a;
+      border: 1px solid #3e4451;
+      color: #abb2bf;
+    }
+    .modal-btn-secondary:hover {
+      background: #3e4451;
+      color: #fff;
+    }
+    .modal-btn-primary {
+      background: #2b74b9;
+      border: 1px solid #388bfd;
+      color: #fff;
+      font-weight: 600;
+    }
+    .modal-btn-primary:hover {
+      background: #388bfd;
+    }
+    .modal-btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
   </style>
 </head>
@@ -1074,6 +1285,7 @@
       <div id="session-badge" class="session-badge">Session --</div>
     </div>
     <div class="top-actions">
+      <button class="btn-action" id="btn-open-path" title="打开/定位远程文件或文件夹 (Ctrl+O)">📂 打开...</button>
       <button class="btn-action btn-save" id="btn-save" title="保存文件 (Ctrl+S)">💾 保存</button>
       <button class="btn-action btn-preview" id="btn-md-preview" style="display: none;" title="切换 Markdown 预览/编辑 (Ctrl+Shift+V)">👁️ 预览</button>
       <button class="btn-action" id="btn-refresh" title="刷新文件列表">🔄 刷新</button>
@@ -1089,6 +1301,7 @@
       <div class="sidebar-header">
         <span>📁 远程文件</span>
         <div class="sidebar-actions">
+          <button class="sidebar-icon-btn" id="btn-tree-open" title="打开/定位远程路径 (Ctrl+O)">📂</button>
           <button class="sidebar-icon-btn" id="btn-tree-up" title="上一级目录">⬆️</button>
           <button class="sidebar-icon-btn" id="btn-tree-new" title="新建文件">➕</button>
           <button class="sidebar-icon-btn" id="btn-tree-refresh" title="刷新目录">🔄</button>
@@ -1199,6 +1412,44 @@
       </div>
     </div>
     <div class="log-content" id="log-container"></div>
+  </div>
+
+  <!-- Open Remote Path Modal Dialog -->
+  <div id="open-path-modal" class="modal-overlay hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📂</span> 打开远程文件或文件夹
+        </div>
+        <button class="modal-close-btn" id="btn-modal-close" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-desc">
+          输入远程服务器的文件或目录路径（支持 <code>~</code> 用户主目录）。<br>
+          • 若是<strong>文件</strong>：将直接在编辑器新标签页中打开。<br>
+          • 若是<strong>文件夹</strong>：将自动在左侧文件树中定位并展开。
+        </div>
+        <div class="modal-input-wrap">
+          <input type="text" id="input-open-path" class="modal-input" placeholder="例如: /etc/nginx/nginx.conf, /var/log, ~/.bashrc" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="modal-quick-chips">
+          <span class="chip-label">快捷路径:</span>
+          <button type="button" class="quick-chip" data-path="~">~ 主目录</button>
+          <button type="button" class="quick-chip" data-path="/">/ 根目录</button>
+          <button type="button" class="quick-chip" data-path="/etc">/etc</button>
+          <button type="button" class="quick-chip" data-path="/var/log">/var/log</button>
+          <button type="button" class="quick-chip" data-path="/tmp">/tmp</button>
+        </div>
+        <div id="open-path-status" class="modal-status hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-footer-hint">按 <kbd>Enter</kbd> 确认，按 <kbd>Esc</kbd> 取消</div>
+        <div class="modal-footer-buttons">
+          <button class="modal-btn modal-btn-secondary" id="btn-open-path-cancel">取消</button>
+          <button class="modal-btn modal-btn-primary" id="btn-open-path-confirm">打开 / 定位</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast">已保存</div>
@@ -1503,6 +1754,140 @@
           }
         },
 
+        showOpenPathModal(defaultPath) {
+          const modal = document.getElementById('open-path-modal');
+          if (!modal) return;
+          const input = document.getElementById('input-open-path');
+          const statusEl = document.getElementById('open-path-status');
+          const btnConfirm = document.getElementById('btn-open-path-confirm');
+          if (statusEl) {
+            statusEl.className = 'modal-status hidden';
+            statusEl.textContent = '';
+          }
+          if (btnConfirm) btnConfirm.disabled = false;
+          if (input) {
+            input.value = defaultPath || this.currentDir || '/';
+          }
+          modal.classList.remove('hidden');
+          setTimeout(() => {
+            if (input) {
+              input.focus();
+              input.select();
+            }
+          }, 60);
+        },
+
+        hideOpenPathModal() {
+          const modal = document.getElementById('open-path-modal');
+          if (!modal) return;
+          modal.classList.add('hidden');
+          const statusEl = document.getElementById('open-path-status');
+          if (statusEl) {
+            statusEl.className = 'modal-status hidden';
+            statusEl.textContent = '';
+          }
+        },
+
+        async openRemotePath(rawPath) {
+          if (!rawPath) return { success: false, error: '路径为空' };
+
+          // Normalize Windows backslashes
+          let p = rawPath.trim().replace(/\\/g, '/');
+
+          // Resolve home dir '~'
+          if (p === '~') {
+            p = this.homedir || '/';
+          } else if (p.startsWith('~/')) {
+            const home = (this.homedir || '/').replace(/\/+$/, '');
+            p = home + p.slice(1);
+          } else if (!p.startsWith('/')) {
+            const base = (this.currentDir || '/').replace(/\/+$/, '');
+            p = base + '/' + p;
+          }
+
+          // Normalize multiple consecutive slashes, but keep leading slash
+          p = p.replace(/\/{2,}/g, '/');
+
+          try {
+            const resp = await this.stat(p);
+            if (resp && resp.success) {
+              if (resp.isDir) {
+                await this.loadDirectory(p);
+                this.showToast(`已定位并展开目录: ${p}`);
+                return { success: true, isDir: true, path: p };
+              } else {
+                await this.openFile(p, 0, true);
+                this.showToast(`已打开文件: ${p}`);
+                return { success: true, isDir: false, path: p };
+              }
+            } else {
+              // If stat failed, but path ended with slash or might be a directory, try listDir
+              if (p.endsWith('/')) {
+                const listResp = await this.listDir(p);
+                if (listResp && listResp.success) {
+                  await this.loadDirectory(p);
+                  this.showToast(`已定位并展开目录: ${p}`);
+                  return { success: true, isDir: true, path: p };
+                }
+              }
+              const err = resp?.error || '无法获取路径信息 (可能不存在或无权限)';
+              this.log('error', 'OPEN_PATH', `定位路径失败: ${p} 错误: ${err}`);
+              return { success: false, error: err, path: p };
+            }
+          } catch (err) {
+            this.log('error', 'OPEN_PATH', `定位路径异常: ${p} 错误: ${err.message || err}`);
+            return { success: false, error: err.message || String(err), path: p };
+          }
+        },
+
+        async handleOpenPathConfirm() {
+          const input = document.getElementById('input-open-path');
+          const statusEl = document.getElementById('open-path-status');
+          const btnConfirm = document.getElementById('btn-open-path-confirm');
+          if (!input) return;
+
+          const raw = input.value.trim();
+          if (!raw) {
+            if (statusEl) {
+              statusEl.className = 'modal-status error';
+              statusEl.textContent = '⚠️ 请输入有效的远程文件或目录路径';
+            }
+            input.focus();
+            return;
+          }
+
+          if (statusEl) {
+            statusEl.className = 'modal-status loading';
+            statusEl.textContent = `⏳ 正在检测远程路径属性...`;
+          }
+          if (btnConfirm) btnConfirm.disabled = true;
+
+          try {
+            const res = await this.openRemotePath(raw);
+            if (res.success) {
+              if (statusEl) {
+                statusEl.className = 'modal-status success';
+                statusEl.textContent = res.isDir ? `📁 已成功定位并展开目录` : `📄 已成功在编辑器打开文件`;
+              }
+              this.hideOpenPathModal();
+            } else {
+              if (statusEl) {
+                statusEl.className = 'modal-status error';
+                statusEl.textContent = `❌ 打开失败: ${res.error}`;
+              }
+              input.focus();
+            }
+          } catch (err) {
+            if (statusEl) {
+              statusEl.className = 'modal-status error';
+              statusEl.textContent = `❌ 请求发生异常: ${err.message || err}`;
+            }
+            input.focus();
+          } finally {
+            if (btnConfirm) btnConfirm.disabled = false;
+          }
+        },
+
         copyLogs() {
           const text = this.logs.map(l => `[${l.time}] [${l.tag}] ${typeof l.message === 'string' ? l.message : JSON.stringify(l.message)}`).join('\n');
           navigator.clipboard.writeText(text).then(() => {
@@ -1593,6 +1978,10 @@
 
                 this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                   this.saveActiveFile();
+                });
+
+                this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyO, () => {
+                  this.showOpenPathModal();
                 });
 
                 if (this.pendingOpenFile) {
@@ -1787,6 +2176,10 @@
 
         async writeFile(path, content, isBinary = false) {
           return this.request('sftp_write_file', { path, content, isBinary });
+        },
+
+        async stat(path) {
+          return this.request('sftp_stat', { path });
         },
 
         // Collapsible Tree View with Lazy Loading
@@ -2744,10 +3137,64 @@
         }
       });
 
-      document.getElementById('sidebar-path-input').addEventListener('keydown', e => {
+      document.getElementById('sidebar-path-input').addEventListener('keydown', async e => {
         if (e.key === 'Enter') {
           const p = e.target.value.trim();
-          if (p) bridge.loadDirectory(p);
+          if (p) {
+            const res = await bridge.openRemotePath(p);
+            if (!res.success) {
+              bridge.showToast(`打开失败: ${res.error}`);
+            }
+          }
+        }
+      });
+
+      // Open Path Modal UI Listeners
+      document.getElementById('btn-open-path')?.addEventListener('click', () => {
+        bridge.showOpenPathModal();
+      });
+
+      document.getElementById('btn-tree-open')?.addEventListener('click', () => {
+        bridge.showOpenPathModal();
+      });
+
+      document.getElementById('btn-modal-close')?.addEventListener('click', () => {
+        bridge.hideOpenPathModal();
+      });
+
+      document.getElementById('btn-open-path-cancel')?.addEventListener('click', () => {
+        bridge.hideOpenPathModal();
+      });
+
+      document.getElementById('btn-open-path-confirm')?.addEventListener('click', () => {
+        bridge.handleOpenPathConfirm();
+      });
+
+      document.getElementById('input-open-path')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          bridge.handleOpenPathConfirm();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          bridge.hideOpenPathModal();
+        }
+      });
+
+      document.querySelectorAll('.quick-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const p = chip.dataset.path;
+          const input = document.getElementById('input-open-path');
+          if (input && p) {
+            input.value = p;
+            input.focus();
+            input.select();
+          }
+        });
+      });
+
+      document.getElementById('open-path-modal')?.addEventListener('click', e => {
+        if (e.target.id === 'open-path-modal') {
+          bridge.hideOpenPathModal();
         }
       });
 
@@ -2778,12 +3225,21 @@
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
           e.preventDefault();
           bridge.saveActiveFile();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+          e.preventDefault();
+          bridge.showOpenPathModal();
         } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
           e.preventDefault();
           bridge.toggleMarkdownPreview();
         } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
           e.preventDefault();
           bridge.toggleSidebar();
+        } else if (e.key === 'Escape') {
+          const modal = document.getElementById('open-path-modal');
+          if (modal && !modal.classList.contains('hidden')) {
+            e.preventDefault();
+            bridge.hideOpenPathModal();
+          }
         }
       });
 

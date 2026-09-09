@@ -2766,7 +2766,7 @@ static void rpc_write_file(int req_id, const char *path, const char *content, bo
 
 static void rpc_stat(int req_id, const char *path)
 {
-    char *cpath = canonify(path);
+    char *cpath = canonify(path && *path ? path : ".");
     struct sftp_request *req = fxp_stat_send(cpath);
     struct sftp_packet *pktin = sftp_wait_for_reply(req);
     struct fxp_attrs attrs;
@@ -2774,9 +2774,15 @@ static void rpc_stat(int req_id, const char *path)
     sfree(cpath);
 
     if (!result) {
-        printf("{\"cmd\":\"sftp_stat_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
-               req_id, path, fxp_error());
+        strbuf *sb = strbuf_new();
+        put_fmt(sb, "{\"cmd\":\"sftp_stat_resp\",\"reqId\":%d,\"path\":", req_id);
+        escape_json_string(sb, path ? path : "");
+        put_str(sb, ",\"success\":false,\"error\":");
+        escape_json_string(sb, fxp_error());
+        put_str(sb, "}\n");
+        fputs(sb->s, stdout);
         fflush(stdout);
+        strbuf_free(sb);
         return;
     }
 
@@ -2788,9 +2794,14 @@ static void rpc_stat(int req_id, const char *path)
     unsigned long mtime = (attrs.flags & SSH_FILEXFER_ATTR_ACMODTIME) ? attrs.mtime : 0;
     unsigned long perms = (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) ? attrs.permissions : 0;
 
-    printf("{\"cmd\":\"sftp_stat_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":true,\"isDir\":%s,\"size\":%"PRIu64",\"mtime\":%lu,\"permissions\":%lu}\n",
-           req_id, path, is_dir ? "true" : "false", size, mtime, perms);
+    strbuf *sb = strbuf_new();
+    put_fmt(sb, "{\"cmd\":\"sftp_stat_resp\",\"reqId\":%d,\"path\":", req_id);
+    escape_json_string(sb, path ? path : "");
+    put_fmt(sb, ",\"success\":true,\"isDir\":%s,\"size\":%"PRIu64",\"mtime\":%lu,\"permissions\":%lu}\n",
+           is_dir ? "true" : "false", size, mtime, perms);
+    fputs(sb->s, stdout);
     fflush(stdout);
+    strbuf_free(sb);
 }
 
 static void rpc_realpath(int req_id, const char *path)
