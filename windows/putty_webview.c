@@ -144,6 +144,8 @@ static void mem_log_dump_to_strbuf(strbuf *sb)
 #define IDR_WEB_FIT_ADDON_JS        2004
 #define IDR_WEB_WEBLINKS_ADDON_JS   2005
 #define IDR_WEB_EDITOR_HTML         2006
+#define IDR_BIN_PSFTP               2007
+#define IDR_BIN_PLINK               2008
 
 struct EmbeddedAsset {
     const wchar_t *filename;
@@ -159,6 +161,12 @@ static const struct EmbeddedAsset embedded_assets[] = {
     { L"editor.html", IDR_WEB_EDITOR_HTML },
 };
 #define NUM_EMBEDDED_ASSETS (sizeof(embedded_assets) / sizeof(embedded_assets[0]))
+
+static const struct EmbeddedAsset embedded_binaries[] = {
+    { L"psftp.exe", IDR_BIN_PSFTP },
+    { L"plink.exe", IDR_BIN_PLINK },
+};
+#define NUM_EMBEDDED_BINARIES (sizeof(embedded_binaries) / sizeof(embedded_binaries[0]))
 
 static bool extract_resource_to_file(int res_id, const wchar_t *filepath)
 {
@@ -256,6 +264,39 @@ static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_pa
         if (needs_update) {
             dbg_log("Asset sync: extracting %ls (%u bytes)", embedded_assets[i].filename, res_size);
             extract_resource_to_file(embedded_assets[i].res_id, filepath);
+        }
+    }
+
+    /* 4. Extract embedded companion binaries (psftp.exe, plink.exe) directly into webview/ directory */
+    wchar_t target_webview_root[MAX_PATH];
+    _snwprintf(target_webview_root, MAX_PATH, L"%s\\webview", exe_path);
+    create_directory_recursive(target_webview_root);
+
+    for (size_t i = 0; i < NUM_EMBEDDED_BINARIES; i++) {
+        HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_binaries[i].res_id), MAKEINTRESOURCEW(10));
+        if (!hrsrc) continue;
+        DWORD res_size = SizeofResource(hinst, hrsrc);
+        if (res_size == 0) continue;
+
+        wchar_t filepath[MAX_PATH];
+        _snwprintf(filepath, MAX_PATH, L"%s\\%s", target_webview_root, embedded_binaries[i].filename);
+
+        bool needs_update = false;
+        HANDLE hf = CreateFileW(filepath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hf == INVALID_HANDLE_VALUE) {
+            needs_update = true;
+        } else {
+            LARGE_INTEGER fsize;
+            if (!GetFileSizeEx(hf, &fsize) || (DWORD)fsize.QuadPart != res_size) {
+                needs_update = true;
+            }
+            CloseHandle(hf);
+        }
+
+        if (needs_update) {
+            dbg_log("Binary sync: extracting companion %ls to webview/ (%u bytes)", embedded_binaries[i].filename, res_size);
+            extract_resource_to_file(embedded_binaries[i].res_id, filepath);
         }
     }
 }
@@ -2613,9 +2654,14 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     else exe_dir[0] = '\0';
 
     char psftp_path[MAX_PATH];
-    snprintf(psftp_path, sizeof(psftp_path), "%spsftp.exe", exe_dir);
-
+    /* 1. First check in webview\psftp.exe (where embedded companion binary is extracted) */
+    snprintf(psftp_path, sizeof(psftp_path), "%swebview\\psftp.exe", exe_dir);
     if (GetFileAttributesA(psftp_path) == INVALID_FILE_ATTRIBUTES) {
+        /* 2. Check in same directory as exe */
+        snprintf(psftp_path, sizeof(psftp_path), "%spsftp.exe", exe_dir);
+    }
+    if (GetFileAttributesA(psftp_path) == INVALID_FILE_ATTRIBUTES) {
+        /* 3. Check system PATH */
         if (SearchPathA(NULL, "psftp.exe", NULL, sizeof(psftp_path), psftp_path, NULL) == 0) {
             dbg_log("sftp_worker_start: psftp.exe not found at '%s'", psftp_path);
             char esc_path[MAX_PATH * 2];

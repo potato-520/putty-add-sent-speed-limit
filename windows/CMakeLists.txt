@@ -221,7 +221,7 @@ add_executable(putty_webview
   ${CMAKE_SOURCE_DIR}/stubs/no-console.c
   putty_webview.rc)
 be_list(putty_webview PuTTY_WebView SSH SERIAL OTHERBACKENDS CONPTY)
-add_dependencies(putty_webview generated_licence_h)
+add_dependencies(putty_webview generated_licence_h psftp plink)
 
 target_include_directories(putty_webview PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/include
@@ -246,6 +246,18 @@ add_custom_command(TARGET putty_webview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_CURRENT_SOURCE_DIR}/webview/web
     $<TARGET_FILE_DIR:putty_webview>/webview/web
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:psftp>
+    ${CMAKE_CURRENT_SOURCE_DIR}/webview/bin/psftp.exe
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:plink>
+    ${CMAKE_CURRENT_SOURCE_DIR}/webview/bin/plink.exe
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:psftp>
+    $<TARGET_FILE_DIR:putty_webview>/webview/psftp.exe
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:plink>
+    $<TARGET_FILE_DIR:putty_webview>/webview/plink.exe
 )
 
 add_custom_target(putty_webkit DEPENDS putty_webview)
