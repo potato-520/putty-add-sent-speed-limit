@@ -1616,7 +1616,18 @@
 
         onMessage(data) {
           try {
-            const msg = (typeof data === 'string') ? JSON.parse(data) : data;
+            let msg;
+            if (typeof data === 'string') {
+              try {
+                msg = JSON.parse(data);
+              } catch (parseErr) {
+                // Auto-repair common Windows paths with unescaped backslashes like C:\path
+                const sanitized = data.replace(/\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})/g, '\\\\');
+                msg = JSON.parse(sanitized);
+              }
+            } else {
+              msg = data;
+            }
             console.log('[Editor IPC Recv]', msg.cmd, msg);
 
             if (msg.cmd === 'host_log_resp') {

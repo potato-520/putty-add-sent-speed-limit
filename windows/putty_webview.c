@@ -2616,12 +2616,16 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     snprintf(psftp_path, sizeof(psftp_path), "%spsftp.exe", exe_dir);
 
     if (GetFileAttributesA(psftp_path) == INVALID_FILE_ATTRIBUTES) {
-        dbg_log("sftp_worker_start: psftp.exe not found at '%s'", psftp_path);
-        char err_msg[512];
-        snprintf(err_msg, sizeof(err_msg),
-                 "{\"cmd\":\"sftp_error\",\"error\":\"未找到 psftp.exe: %s\"}", psftp_path);
-        webview_host_send_to_window(ed->hwnd, err_msg);
-        return false;
+        if (SearchPathA(NULL, "psftp.exe", NULL, sizeof(psftp_path), psftp_path, NULL) == 0) {
+            dbg_log("sftp_worker_start: psftp.exe not found at '%s'", psftp_path);
+            char esc_path[MAX_PATH * 2];
+            json_escape_string(psftp_path, esc_path, sizeof(esc_path));
+            char err_msg[1024];
+            snprintf(err_msg, sizeof(err_msg),
+                     "{\"cmd\":\"sftp_error\",\"error\":\"未找到 psftp.exe: %s\"}", esc_path);
+            webview_host_send_to_window(ed->hwnd, err_msg);
+            return false;
+        }
     }
 
     const char *host = conf_get_str(sess->cfg, CONF_host);
