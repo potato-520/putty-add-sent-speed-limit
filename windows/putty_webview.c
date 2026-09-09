@@ -138,6 +138,9 @@ static void mem_log_dump_to_strbuf(strbuf *sb)
     LeaveCriticalSection(&g_mem_log_cs);
 }
 
+#include "miniz.h"
+
+#define IDR_WEBVIEW_ASSETS_ZIP      2000
 #define IDR_WEB_INDEX_HTML          2001
 #define IDR_WEB_XTERM_JS            2002
 #define IDR_WEB_XTERM_CSS           2003
@@ -203,6 +206,79 @@ static bool create_directory_recursive(const wchar_t *dir)
     return CreateDirectoryW(tmp, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
+static bool extract_zip_from_memory(const void *zip_data, size_t zip_size, const wchar_t *target_root_dir)
+{
+    mz_zip_archive zip_archive;
+    memset(&zip_archive, 0, sizeof(zip_archive));
+
+    if (!mz_zip_reader_init_mem(&zip_archive, zip_data, zip_size, 0)) {
+        dbg_log("extract_zip_from_memory: mz_zip_reader_init_mem failed");
+        return false;
+    }
+
+    mz_uint num_files = mz_zip_reader_get_num_files(&zip_archive);
+    dbg_log("extract_zip_from_memory: unpacking %u files into %ls...", num_files, target_root_dir);
+
+    for (mz_uint i = 0; i < num_files; i++) {
+        mz_zip_archive_file_stat file_stat;
+        if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) {
+            continue;
+        }
+
+        if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) {
+            continue;
+        }
+
+        wchar_t wrelpath[MAX_PATH] = {0};
+        MultiByteToWideChar(CP_UTF8, 0, file_stat.m_filename, -1, wrelpath, MAX_PATH);
+
+        wchar_t full_filepath[MAX_PATH];
+        _snwprintf(full_filepath, MAX_PATH, L"%s\\%s", target_root_dir, wrelpath);
+
+        for (wchar_t *p = full_filepath; *p; p++) {
+            if (*p == L'/') *p = L'\\';
+        }
+
+        /* Ensure parent directory exists */
+        wchar_t parent_dir[MAX_PATH];
+        wcsncpy(parent_dir, full_filepath, MAX_PATH - 1);
+        parent_dir[MAX_PATH - 1] = L'\0';
+        wchar_t *last_slash = wcsrchr(parent_dir, L'\\');
+        if (last_slash) {
+            *last_slash = L'\0';
+            create_directory_recursive(parent_dir);
+        }
+
+        /* Check if file already exists with same uncompressed size */
+        HANDLE hf = CreateFileW(full_filepath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hf != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER fsize;
+            if (GetFileSizeEx(hf, &fsize) && (mz_uint64)fsize.QuadPart == file_stat.m_uncomp_size) {
+                CloseHandle(hf);
+                continue;
+            }
+            CloseHandle(hf);
+        }
+
+        size_t uncomp_size = 0;
+        void *p = mz_zip_reader_extract_to_heap(&zip_archive, i, &uncomp_size, 0);
+        if (p) {
+            HANDLE out_hf = CreateFileW(full_filepath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (out_hf != INVALID_HANDLE_VALUE) {
+                DWORD written = 0;
+                WriteFile(out_hf, p, (DWORD)uncomp_size, &written, NULL);
+                CloseHandle(out_hf);
+            }
+            mz_free(p);
+        }
+    }
+
+    mz_zip_reader_end(&zip_archive);
+    dbg_log("extract_zip_from_memory: extraction complete!");
+    return true;
+}
+
 static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_path, size_t max_len)
 {
     wchar_t exe_path[MAX_PATH];
@@ -220,8 +296,10 @@ static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_pa
         return;
     }
 
-    /* 2. Deployed standalone mode: ensure target directory exists */
-    _snwprintf(target_web_dir, MAX_PATH, L"%s\\webview\\web", exe_path);
+    /* 2. Deployed standalone mode: target directories */
+    wchar_t target_webview_root[MAX_PATH];
+    _snwprintf(target_webview_root, MAX_PATH, L"%s\\webview", exe_path);
+    _snwprintf(target_web_dir, MAX_PATH, L"%s\\web", target_webview_root);
     _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
     _snwprintf(out_editor_path, max_len, L"%s\\editor.html", target_web_dir);
 
@@ -230,15 +308,56 @@ static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_pa
         /* If exe directory is read-only (e.g. Program Files), fall back to %LOCALAPPDATA% */
         wchar_t appdata[MAX_PATH];
         if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
-            _snwprintf(target_web_dir, MAX_PATH, L"%s\\PuTTY-WebView\\webview\\web", appdata);
+            _snwprintf(target_webview_root, MAX_PATH, L"%s\\PuTTY-WebView\\webview", appdata);
+            _snwprintf(target_web_dir, MAX_PATH, L"%s\\web", target_webview_root);
             create_directory_recursive(target_web_dir);
             _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
             _snwprintf(out_editor_path, max_len, L"%s\\editor.html", target_web_dir);
         }
     }
 
-    /* 3. Fast synchronous verification & sync of embedded assets (< 1ms total)
-     * Automatically updates disk files if exe is upgraded, without requiring manual deletion of webview/ */
+    /* 3. Check for comprehensive embedded zip package (IDR_WEBVIEW_ASSETS_ZIP) */
+    HRSRC hZipRsrc = FindResourceW(hinst, MAKEINTRESOURCEW(IDR_WEBVIEW_ASSETS_ZIP), MAKEINTRESOURCEW(10));
+    if (hZipRsrc) {
+        DWORD zip_size = SizeofResource(hinst, hZipRsrc);
+        HGLOBAL hg = LoadResource(hinst, hZipRsrc);
+        const void *zip_data = hg ? LockResource(hg) : NULL;
+        if (zip_data && zip_size > 0) {
+            wchar_t stamp_file[MAX_PATH];
+            _snwprintf(stamp_file, MAX_PATH, L"%s\\.assets_stamp", target_webview_root);
+
+            wchar_t test_monaco[MAX_PATH];
+            _snwprintf(test_monaco, MAX_PATH, L"%s\\vs\\loader.js", target_web_dir);
+
+            bool needs_extract = true;
+            FILE *sfp = _wfopen(stamp_file, L"rb");
+            if (sfp) {
+                DWORD stored_size = 0;
+                if (fread(&stored_size, sizeof(stored_size), 1, sfp) == 1 && stored_size == zip_size) {
+                    if (GetFileAttributesW(test_monaco) != INVALID_FILE_ATTRIBUTES &&
+                        GetFileAttributesW(out_html_path) != INVALID_FILE_ATTRIBUTES) {
+                        needs_extract = false;
+                    }
+                }
+                fclose(sfp);
+            }
+
+            if (needs_extract) {
+                dbg_log("ensure_webview_assets: unpacking complete embedded asset package (%u bytes)...", zip_size);
+                extract_zip_from_memory(zip_data, zip_size, target_webview_root);
+                sfp = _wfopen(stamp_file, L"wb");
+                if (sfp) {
+                    fwrite(&zip_size, sizeof(zip_size), 1, sfp);
+                    fclose(sfp);
+                }
+            } else {
+                dbg_log("ensure_webview_assets: webview assets verified up to date (stamp match, 0ms)");
+            }
+            return;
+        }
+    }
+
+    /* 4. Fallback legacy sync if zip is not embedded */
     for (size_t i = 0; i < NUM_EMBEDDED_ASSETS; i++) {
         HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_assets[i].res_id), MAKEINTRESOURCEW(10));
         if (!hrsrc) continue;
@@ -266,11 +385,6 @@ static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_pa
             extract_resource_to_file(embedded_assets[i].res_id, filepath);
         }
     }
-
-    /* 4. Extract embedded companion binaries (psftp.exe, plink.exe) directly into webview/ directory */
-    wchar_t target_webview_root[MAX_PATH];
-    _snwprintf(target_webview_root, MAX_PATH, L"%s\\webview", exe_path);
-    create_directory_recursive(target_webview_root);
 
     for (size_t i = 0; i < NUM_EMBEDDED_BINARIES; i++) {
         HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_binaries[i].res_id), MAKEINTRESOURCEW(10));

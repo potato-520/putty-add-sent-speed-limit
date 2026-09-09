@@ -27,6 +27,13 @@ if [[ ${#targets[@]} -eq 0 ]]; then
     targets=(putty plink)
 fi
 
+if [[ " ${targets[*]} " =~ " putty_webview " || " ${targets[*]} " =~ " putty_webkit " ]]; then
+    python3 "$script_dir/windows/webview/pack_assets.py" \
+        "$script_dir/windows/webview/web" \
+        "$script_dir/windows/webview/bin" \
+        "$script_dir/windows/webview/webview_assets.zip"
+fi
+
 "$cmake_exe" -S "$src_win" -B "$build_win" -G "Visual Studio 17 2022" -A x64 < /dev/null
 "$cmake_exe" --build "$build_win" --config Release --target "${targets[@]}" < /dev/null
 

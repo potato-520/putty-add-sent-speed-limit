@@ -213,6 +213,17 @@ string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}
 string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
+add_library(miniz STATIC
+  miniz/miniz.c
+  miniz/miniz_tdef.c
+  miniz/miniz_tinfl.c
+  miniz/miniz_zip.c
+)
+target_include_directories(miniz PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/miniz)
+if(MSVC)
+  target_compile_options(miniz PRIVATE "/utf-8" "/wd4138" "/wd4244" "/wd4267")
+endif()
+
 add_executable(putty_webview
   putty_webview.c
   conpty.c
@@ -226,6 +237,7 @@ add_dependencies(putty_webview generated_licence_h psftp plink)
 target_include_directories(putty_webview PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/include
   ${CMAKE_CURRENT_SOURCE_DIR}/webview
+  ${CMAKE_CURRENT_SOURCE_DIR}/miniz
 )
 
 if(MSVC)
@@ -234,6 +246,7 @@ endif()
 
 target_link_libraries(putty_webview
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/lib/x64/WebView2LoaderStatic.lib
+  miniz
   version
   crypt32
   guiterminal guimisc eventloop sshclient otherbackends settings network crypto
