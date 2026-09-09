@@ -778,6 +778,34 @@
       align-items: center;
       gap: 8px;
     }
+    /* Terminal Hyperlink Tooltip */
+    #term-link-tooltip {
+      position: fixed;
+      display: none;
+      z-index: 99999;
+      background: #252526;
+      color: #cccccc;
+      border: 1px solid #454545;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+      max-width: 560px;
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    #term-link-tooltip .link-url {
+      color: #4ec9b0;
+      font-family: 'Cascadia Code', Consolas, monospace;
+      font-size: 12px;
+    }
+    #term-link-tooltip .link-hint {
+      color: #888888;
+      font-size: 10.5px;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
@@ -993,6 +1021,9 @@
     </div>
   </div>
 
+  <!-- Terminal Link Tooltip -->
+  <div id="term-link-tooltip"></div>
+
   <script src="xterm.js"></script>
   <script src="xterm-addon-fit.js"></script>
   <script src="xterm-addon-web-links.js"></script>
@@ -1024,6 +1055,50 @@
     function sendToHost(type, data) {
       if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage(type + data);
+      }
+    }
+
+    let activeHoverLink = null;
+    const linkTooltipEl = document.getElementById('term-link-tooltip');
+
+    function escapeHtml(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function showLinkTooltip(e, uri) {
+      activeHoverLink = uri;
+      if (!linkTooltipEl) return;
+      let displayUri = uri;
+      let hint = '点击或 Ctrl+单击 打开链接 (Click or Ctrl+Click to open)';
+      if (uri.startsWith('file://') || uri.startsWith('/mnt/') || uri.startsWith('vscode://')) {
+        hint = '点击或 Ctrl+单击 在 VS Code / 默认编辑器中定位打开';
+      }
+      linkTooltipEl.innerHTML = `<div class="link-url">${escapeHtml(displayUri)}</div><div class="link-hint">${hint}</div>`;
+      linkTooltipEl.style.display = 'block';
+
+      const mouseX = (e && e.clientX !== undefined) ? e.clientX : 0;
+      const mouseY = (e && e.clientY !== undefined) ? e.clientY : 0;
+      const tipWidth = linkTooltipEl.offsetWidth || 320;
+      const tipHeight = linkTooltipEl.offsetHeight || 44;
+
+      let left = mouseX + 12;
+      let top = mouseY + 18;
+
+      if (left + tipWidth > window.innerWidth - 10) {
+        left = Math.max(10, mouseX - tipWidth - 10);
+      }
+      if (top + tipHeight > window.innerHeight - 10) {
+        top = Math.max(10, mouseY - tipHeight - 10);
+      }
+
+      linkTooltipEl.style.left = `${left}px`;
+      linkTooltipEl.style.top = `${top}px`;
+    }
+
+    function hideLinkTooltip() {
+      activeHoverLink = null;
+      if (linkTooltipEl) {
+        linkTooltipEl.style.display = 'none';
       }
     }
 
@@ -1779,21 +1854,52 @@
         cursorBlink: true,
         cursorStyle: 'block',
         allowProposedApi: true,
-        scrollback: 10000
+        scrollback: 10000,
+        linkHandler: {
+          allowNonHttpProtocols: true,
+          activate: (e, text, range) => {
+            hideLinkTooltip();
+            sendToHost('5', text);
+          },
+          hover: (e, text, range) => {
+            showLinkTooltip(e, text);
+          },
+          leave: (e, text, range) => {
+            hideLinkTooltip();
+          }
+        }
       });
 
       const fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
 
       if (window.WebLinksAddon) {
-        term.loadAddon(new WebLinksAddon.WebLinksAddon());
+        term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => {
+          hideLinkTooltip();
+          sendToHost('5', uri);
+        }, {
+          hover: (e, text, range) => {
+            showLinkTooltip(e, text);
+          },
+          leave: (e, text, range) => {
+            hideLinkTooltip();
+          }
+        }));
       }
 
       term.open(viewEl);
 
-      // Ensure terminal gets focused on click; Ctrl+Click opens Multi-line Editor
+      // Ensure terminal gets focused on click; Ctrl+Click opens Multi-line Editor (unless clicking a link)
       viewEl.addEventListener('mousedown', e => {
         if (e.ctrlKey && e.button === 0) {
+          if (activeHoverLink) {
+            e.preventDefault();
+            e.stopPropagation();
+            const targetUri = activeHoverLink;
+            hideLinkTooltip();
+            sendToHost('5', targetUri);
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           openMultiLineEditor(id);
@@ -1816,6 +1922,9 @@
           e.stopPropagation();
         }
       }, true);
+
+      viewEl.addEventListener('wheel', hideLinkTooltip, { passive: true });
+      viewEl.addEventListener('mouseleave', hideLinkTooltip);
 
       // Keystroke input
       term.onData(data => {

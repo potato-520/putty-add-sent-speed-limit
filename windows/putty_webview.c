@@ -2022,6 +2022,186 @@ void write_aclip(HWND hwnd, int clipboard, char *data, int len)
     copy_to_clipboard_utf8(hwnd, data, len);
 }
 
+static bool find_vscode_path(wchar_t *out_path, size_t max_len)
+{
+    /* 1. Check SearchPathW for Code.exe */
+    if (SearchPathW(NULL, L"Code.exe", NULL, (DWORD)max_len, out_path, NULL) > 0) {
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    /* 2. Check %LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe */
+    wchar_t localappdata[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", localappdata, MAX_PATH) > 0) {
+        _snwprintf(out_path, max_len, L"%s\\Programs\\Microsoft VS Code\\Code.exe", localappdata);
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    /* 3. Check %ProgramFiles%\Microsoft VS Code\Code.exe */
+    wchar_t progfiles[MAX_PATH];
+    if (GetEnvironmentVariableW(L"ProgramFiles", progfiles, MAX_PATH) > 0) {
+        _snwprintf(out_path, max_len, L"%s\\Microsoft VS Code\\Code.exe", progfiles);
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    /* 4. Check %ProgramFiles(x86)%\Microsoft VS Code\Code.exe */
+    if (GetEnvironmentVariableW(L"ProgramFiles(x86)", progfiles, MAX_PATH) > 0) {
+        _snwprintf(out_path, max_len, L"%s\\Microsoft VS Code\\Code.exe", progfiles);
+        if (GetFileAttributesW(out_path) != INVALID_FILE_ATTRIBUTES)
+            return true;
+    }
+
+    return false;
+}
+
+static void url_decode(char *dst, const char *src)
+{
+    while (*src) {
+        if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], 0 };
+            char *end = NULL;
+            long val = strtol(hex, &end, 16);
+            if (end == hex + 2) {
+                *dst++ = (char)val;
+                src += 3;
+                continue;
+            }
+        }
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+}
+
+static void open_url_or_file(HWND hwnd, const char *input)
+{
+    if (!input || !*input)
+        return;
+
+    dbg_log("open_url_or_file: raw input='%s'", input);
+
+    /* Web links or email */
+    if (!strncmp(input, "http://", 7) || !strncmp(input, "https://", 8) || !strncmp(input, "mailto:", 7)) {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, input, -1, NULL, 0);
+        if (wlen > 0) {
+            wchar_t *wurl = (wchar_t *)smalloc(wlen * sizeof(wchar_t));
+            MultiByteToWideChar(CP_UTF8, 0, input, -1, wurl, wlen);
+            ShellExecuteW(hwnd, L"open", wurl, NULL, NULL, SW_SHOWNORMAL);
+            sfree(wurl);
+        }
+        return;
+    }
+
+    /* Custom protocol (vscode://, etc.) */
+    if (!strncmp(input, "vscode://", 9)) {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, input, -1, NULL, 0);
+        if (wlen > 0) {
+            wchar_t *wurl = (wchar_t *)smalloc(wlen * sizeof(wchar_t));
+            MultiByteToWideChar(CP_UTF8, 0, input, -1, wurl, wlen);
+            ShellExecuteW(hwnd, L"open", wurl, NULL, NULL, SW_SHOWNORMAL);
+            sfree(wurl);
+        }
+        return;
+    }
+
+    /* Process file:// or local paths */
+    char raw[2048];
+    strncpy(raw, input, sizeof(raw) - 1);
+    raw[sizeof(raw) - 1] = '\0';
+
+    int line = 0;
+    /* Check for #L1779-L1815 or #L1779 or #1779 */
+    char *hash = strrchr(raw, '#');
+    if (hash) {
+        char *p = hash + 1;
+        if (*p == 'L' || *p == 'l') p++;
+        if (*p >= '0' && *p <= '9') {
+            line = atoi(p);
+        }
+        *hash = '\0';
+    }
+
+    /* If no hash, check for trailing :line (e.g. ML86306Ctl.c:1779) */
+    if (line == 0) {
+        char *colon = strrchr(raw, ':');
+        if (colon && colon > raw + 2) {
+            char *p = colon + 1;
+            bool all_digits = (*p != '\0');
+            for (char *q = p; *q; q++) {
+                if (*q < '0' || *q > '9') { all_digits = false; break; }
+            }
+            if (all_digits) {
+                line = atoi(p);
+                *colon = '\0';
+            }
+        }
+    }
+
+    char decoded[2048];
+    url_decode(decoded, raw);
+
+    const char *p = decoded;
+    if (!strncmp(p, "file://", 7)) {
+        p += 7;
+        if (p[0] == '/' && p[1] != '/') {
+            if (isalpha((unsigned char)p[1]) && p[2] == ':') {
+                p++; /* file:///C:/path -> C:/path */
+            }
+        } else if (!strncmp(p, "localhost/", 10)) {
+            p += 9;
+            if (isalpha((unsigned char)p[1]) && p[2] == ':') {
+                p++;
+            }
+        }
+    }
+
+    char win_path[MAX_PATH * 2] = {0};
+    /* Check if WSL path like /mnt/c/... */
+    if (p[0] == '/' && (p[1] == 'm' || p[1] == 'M') && (p[2] == 'n' || p[2] == 'N') &&
+        (p[3] == 't' || p[3] == 'T') && p[4] == '/' && isalpha((unsigned char)p[5]) &&
+        (p[6] == '/' || p[6] == '\0')) {
+        char drive = (char)toupper((unsigned char)p[5]);
+        const char *rest = (p[6] == '/') ? (p + 7) : "";
+        snprintf(win_path, sizeof(win_path), "%c:\\%s", drive, rest);
+    } else if (isalpha((unsigned char)p[0]) && p[1] == ':') {
+        snprintf(win_path, sizeof(win_path), "%s", p);
+    } else if (p[0] == '/' && p[1] != '/') {
+        /* WSL root / Linux path e.g. /home/... */
+        snprintf(win_path, sizeof(win_path), "\\\\wsl.localhost\\Ubuntu%s", p);
+    } else {
+        snprintf(win_path, sizeof(win_path), "%s", p);
+    }
+
+    for (char *c = win_path; *c; c++) {
+        if (*c == '/') *c = '\\';
+    }
+
+    dbg_log("open_url_or_file: resolved win_path='%s', line=%d", win_path, line);
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, win_path, -1, NULL, 0);
+    if (wlen <= 0) return;
+    wchar_t *wwin_path = (wchar_t *)smalloc(wlen * sizeof(wchar_t));
+    MultiByteToWideChar(CP_UTF8, 0, win_path, -1, wwin_path, wlen);
+
+    wchar_t vscode_exe[MAX_PATH];
+    if (find_vscode_path(vscode_exe, MAX_PATH)) {
+        wchar_t params[MAX_PATH * 2 + 32];
+        if (line > 0) {
+            _snwprintf(params, sizeof(params) / sizeof(wchar_t), L"-g \"%s:%d\"", wwin_path, line);
+        } else {
+            _snwprintf(params, sizeof(params) / sizeof(wchar_t), L"-g \"%s\"", wwin_path);
+        }
+        dbg_log("open_url_or_file: launching VS Code with params");
+        ShellExecuteW(hwnd, L"open", vscode_exe, params, NULL, SW_SHOWNORMAL);
+    } else {
+        dbg_log("open_url_or_file: launching via default ShellExecute");
+        ShellExecuteW(hwnd, L"open", wwin_path, NULL, NULL, SW_SHOWNORMAL);
+    }
+    sfree(wwin_path);
+}
+
+
 static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const char *suggested_title)
 {
     int proto = conf_get_int(conf_to_use, CONF_protocol);
@@ -2559,6 +2739,9 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
     } else if (type == '4') {
         /* Auto-copy selected text to native clipboard */
         copy_to_clipboard_utf8(hwnd, payload, strlen(payload));
+    } else if (type == '5') {
+        /* Open URL or local file / jump to line */
+        open_url_or_file(hwnd, payload);
     } else if (type == 'P') {
         /* WebView SSH Auth response: P{sess_id}:{json} or P{sess_id}:cancel */
         const char *colon = strchr(payload, ':');
