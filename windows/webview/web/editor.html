@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PuTTY Remote File Editor</title>
+  <link rel="stylesheet" data-name="vs/editor/editor.main" href="vs/editor/editor.main.css">
   <style>
     :root {
       --bg-main: #1e1e1e;
@@ -208,7 +209,7 @@
     }
 
     .tree-node {
-      padding: 5px 12px;
+      padding: 3px 8px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -216,21 +217,32 @@
       color: var(--text-main);
       font-size: 12.5px;
       white-space: nowrap;
+      height: 24px;
+      line-height: 24px;
     }
 
     .tree-node-left {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       overflow: hidden;
       text-overflow: ellipsis;
+      flex: 1;
+    }
+
+    .tree-node-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .tree-node-size {
-      font-size: 11px;
+      font-size: 10.5px;
       color: var(--text-muted);
       font-family: Consolas, monospace;
-      margin-left: 8px;
+      margin-left: 6px;
+      margin-right: 4px;
+      flex-shrink: 0;
     }
 
     .tree-node:hover {
@@ -242,11 +254,30 @@
       color: #fff;
     }
 
+    .tree-chevron {
+      font-size: 9px;
+      width: 14px;
+      text-align: center;
+      display: inline-block;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .tree-chevron-spacer {
+      width: 14px;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
     .node-icon {
       font-size: 13px;
       width: 16px;
       text-align: center;
       flex-shrink: 0;
+    }
+
+    .tree-children {
+      display: none;
     }
 
     /* Sidebar Resizer */
@@ -314,6 +345,14 @@
       background-color: var(--bg-tab-active);
       color: var(--text-active);
       border-top: 2px solid var(--accent);
+    }
+
+    .tab-item.preview {
+      font-style: italic;
+    }
+
+    .tab-item.pinned {
+      font-style: normal;
     }
 
     .tab-item.pinned .tab-pin-icon {
@@ -388,12 +427,20 @@
 
     .empty-hint {
       font-size: 12.5px;
-      max-width: 400px;
-      line-height: 1.5;
+      max-width: 420px;
+      line-height: 1.6;
     }
 
-    /* Text Editor Area */
-    #editor-wrapper {
+    /* Monaco Container */
+    #monaco-container {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+
+    /* Fallback Textarea Editor */
+    #fallback-wrapper {
       display: none;
       flex: 1;
       flex-direction: row;
@@ -401,7 +448,7 @@
       background: #1e1e1e;
     }
 
-    #line-numbers {
+    #fallback-line-numbers {
       width: 48px;
       background-color: #1e1e1e;
       color: #858585;
@@ -415,7 +462,7 @@
       overflow: hidden;
     }
 
-    #editor-textarea {
+    #fallback-textarea {
       flex: 1;
       background: #1e1e1e;
       color: #d4d4d4;
@@ -570,15 +617,18 @@
       <div id="editor-viewport">
         <div id="empty-state" class="empty-state">
           <div class="empty-icon">📁</div>
-          <div class="empty-title">独立 SFTP 文件浏览器与编辑器就绪</div>
+          <div class="empty-title">PuTTY Remote File Editor</div>
           <div class="empty-hint">
-            从左侧文件树选择文件，或在主终端中点击 <code>file:///...</code> 链接以自动在此窗口打开并定位。
+            从左侧文件树选择文件打开，或在终端超链接中点击自动跨窗口跳转定位。<br>
+            双击标签可固定 (Pin Tab)，按 <code>Ctrl+S</code> 自动保存到远程服务器。
           </div>
         </div>
 
-        <div id="editor-wrapper">
-          <div id="line-numbers">1</div>
-          <textarea id="editor-textarea" spellcheck="false"></textarea>
+        <div id="monaco-container"></div>
+
+        <div id="fallback-wrapper">
+          <div id="fallback-line-numbers">1</div>
+          <textarea id="fallback-textarea" spellcheck="false"></textarea>
         </div>
 
         <div id="image-wrapper">
@@ -604,9 +654,30 @@
 
   <div id="toast">已保存</div>
 
+  <!-- Monaco Editor AMD Loader -->
+  <script src="vs/loader.js"></script>
+
   <script>
     (function () {
-      // 1. WebMessage IPC Infrastructure with Request-Response Map
+      // 1. Configure Monaco Web Workers for local file/webview environment
+      window.MonacoEnvironment = {
+        getWorkerUrl: function (workerId, label) {
+          let workerPath = 'vs/editor/editor.worker.js';
+          if (label === 'json') workerPath = 'vs/language/json/json.worker.js';
+          else if (label === 'css' || label === 'scss' || label === 'less') workerPath = 'vs/language/css/css.worker.js';
+          else if (label === 'html') workerPath = 'vs/language/html/html.worker.js';
+          else if (label === 'typescript' || label === 'javascript') workerPath = 'vs/language/typescript/ts.worker.js';
+
+          return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
+            self.MonacoEnvironment = {
+              baseUrl: '${new URL('.', window.location.href).href}'
+            };
+            importScripts('${new URL(workerPath, window.location.href).href}');
+          `)}`;
+        }
+      };
+
+      // 2. Editor Bridge & State Management
       const bridge = {
         sessionId: 0,
         sessionName: '',
@@ -616,9 +687,14 @@
         reqCounter: 1,
         pendingReqs: new Map(),
 
-        // Open tabs map: path => { path, name, content, originalContent, isDirty, isPinned, isBinary, size }
+        // Monaco instance
+        monacoReady: false,
+        editor: null,
+
+        // Open tabs map: path => { path, name, model, originalContent, isDirty, isPinned, isBinary, size, viewState }
         tabs: new Map(),
         activePath: null,
+        pendingOpenFile: null,
 
         send(obj) {
           if (window.chrome && window.chrome.webview) {
@@ -635,7 +711,7 @@
                 this.pendingReqs.delete(reqId);
                 reject(new Error(`Request timeout for cmd: ${cmd}`));
               }
-            }, 15000);
+            }, 20000);
 
             this.pendingReqs.set(reqId, { resolve, reject, timer });
             this.send({ cmd, reqId, ...params });
@@ -643,6 +719,7 @@
         },
 
         init() {
+          this.initMonaco();
           this.send({ cmd: 'editor_init' });
 
           if (window.chrome && window.chrome.webview) {
@@ -652,12 +729,58 @@
           }
         },
 
+        initMonaco() {
+          try {
+            if (typeof require !== 'undefined') {
+              require.config({ paths: { 'vs': './vs' } });
+              require(['vs/editor/editor.main'], () => {
+                console.log('[Monaco] Loaded successfully');
+                this.monacoReady = true;
+                const container = document.getElementById('monaco-container');
+                this.editor = monaco.editor.create(container, {
+                  theme: 'vs-dark',
+                  automaticLayout: true,
+                  fontSize: 13.5,
+                  fontFamily: 'Consolas, "Courier New", monospace',
+                  minimap: { enabled: true },
+                  scrollBeyondLastLine: false,
+                  wordWrap: 'off',
+                  renderWhitespace: 'selection',
+                  tabSize: 4,
+                  contextmenu: true
+                });
+
+                this.editor.onDidChangeCursorPosition(e => {
+                  document.getElementById('status-pos').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+                });
+
+                this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                  this.saveActiveFile();
+                });
+
+                if (this.pendingOpenFile) {
+                  const { path, line } = this.pendingOpenFile;
+                  this.pendingOpenFile = null;
+                  this.openFile(path, line);
+                } else if (this.activePath && this.tabs.has(this.activePath)) {
+                  this.switchTab(this.activePath, 1);
+                }
+              }, err => {
+                console.warn('[Monaco] Load failed, falling back to textarea editor:', err);
+                this.monacoReady = false;
+              });
+            }
+          } catch (e) {
+            console.warn('[Monaco] Init error, using fallback:', e);
+            this.monacoReady = false;
+          }
+        },
+
         onMessage(data) {
           try {
             const msg = (typeof data === 'string') ? JSON.parse(data) : data;
             console.log('[Editor IPC Recv]', msg.cmd, msg);
 
-            // Handle Request-Response resolution
             if (msg.reqId && this.pendingReqs.has(msg.reqId)) {
               const { resolve, timer } = this.pendingReqs.get(msg.reqId);
               clearTimeout(timer);
@@ -695,7 +818,11 @@
                 break;
 
               case 'open_file':
-                this.openFile(msg.path, msg.line);
+                if (!this.monacoReady && typeof require !== 'undefined') {
+                  this.pendingOpenFile = { path: msg.path, line: msg.line };
+                } else {
+                  this.openFile(msg.path, msg.line);
+                }
                 break;
 
               case 'pong':
@@ -707,7 +834,6 @@
           }
         },
 
-        // SFTP operations
         async listDir(path) {
           return this.request('sftp_list_dir', { path });
         },
@@ -720,10 +846,7 @@
           return this.request('sftp_write_file', { path, content, isBinary });
         },
 
-        async stat(path) {
-          return this.request('sftp_stat', { path });
-        },
-
+        // Collapsible Tree View with Lazy Loading
         async loadDirectory(path) {
           const tree = document.getElementById('file-tree-container');
           tree.innerHTML = `
@@ -756,12 +879,14 @@
 
             tree.innerHTML = '';
 
-            // Add parent ".." entry if not root
+            // Parent ".." entry if not root
             if (path !== '/' && path !== '') {
               const upNode = document.createElement('div');
               upNode.className = 'tree-node';
+              upNode.style.paddingLeft = '8px';
               upNode.innerHTML = `
                 <div class="tree-node-left">
+                  <span class="tree-chevron-spacer"></span>
                   <span class="node-icon">📁</span>
                   <span>..</span>
                 </div>
@@ -774,34 +899,13 @@
             }
 
             for (const item of entries) {
-              const node = document.createElement('div');
-              node.className = 'tree-node';
               const fullPath = path.endsWith('/') ? `${path}${item.name}` : `${path}/${item.name}`;
-              const icon = this.getFileIcon(item.name, item.isDir);
-              const sizeStr = item.isDir ? '' : this.formatSize(item.size);
-
-              node.innerHTML = `
-                <div class="tree-node-left" title="${item.name}">
-                  <span class="node-icon">${icon}</span>
-                  <span>${item.name}</span>
-                </div>
-                ${sizeStr ? `<span class="tree-node-size">${sizeStr}</span>` : ''}
-              `;
-
-              node.addEventListener('click', () => {
-                if (item.isDir) {
-                  this.loadDirectory(fullPath);
-                } else {
-                  this.openFile(fullPath);
-                }
-              });
-
-              tree.appendChild(node);
+              this.renderTreeNode(item, fullPath, tree, 0);
             }
 
             if (entries.length === 0) {
               tree.innerHTML = `
-                <div class="tree-node" style="color: var(--text-muted);">
+                <div class="tree-node" style="color: var(--text-muted); padding-left: 8px;">
                   <span class="node-icon">📂</span>
                   <span>空目录</span>
                 </div>
@@ -817,6 +921,121 @@
           }
         },
 
+        renderTreeNode(item, fullPath, parentContainer, level) {
+          const node = document.createElement('div');
+          node.className = 'tree-node';
+          node.style.paddingLeft = `${level * 14 + 6}px`;
+
+          const icon = this.getFileIcon(item.name, item.isDir);
+          const sizeStr = item.isDir ? '' : this.formatSize(item.size);
+
+          if (item.isDir) {
+            node.innerHTML = `
+              <div class="tree-node-left" title="${fullPath}">
+                <span class="tree-chevron">▶</span>
+                <span class="node-icon">${icon}</span>
+                <span class="tree-node-name">${item.name}</span>
+              </div>
+            `;
+
+            const childContainer = document.createElement('div');
+            childContainer.className = 'tree-children';
+
+            node.addEventListener('click', () => {
+              const chevron = node.querySelector('.tree-chevron');
+              this.toggleFolder(fullPath, node, chevron, childContainer, level);
+            });
+
+            parentContainer.appendChild(node);
+            parentContainer.appendChild(childContainer);
+          } else {
+            node.innerHTML = `
+              <div class="tree-node-left" title="${fullPath}">
+                <span class="tree-chevron-spacer"></span>
+                <span class="node-icon">${icon}</span>
+                <span class="tree-node-name">${item.name}</span>
+              </div>
+              ${sizeStr ? `<span class="tree-node-size">${sizeStr}</span>` : ''}
+            `;
+
+            node.addEventListener('click', () => {
+              // Highlight active tree node
+              document.querySelectorAll('.tree-node').forEach(el => el.classList.remove('active'));
+              node.classList.add('active');
+              this.openFile(fullPath);
+            });
+
+            parentContainer.appendChild(node);
+          }
+        },
+
+        async toggleFolder(folderPath, folderNode, chevron, childContainer, level) {
+          const isExpanded = childContainer.style.display === 'block';
+          if (isExpanded) {
+            chevron.textContent = '▶';
+            childContainer.style.display = 'none';
+            return;
+          }
+
+          chevron.textContent = '▼';
+          childContainer.style.display = 'block';
+
+          if (childContainer.dataset.loaded === 'true') {
+            return;
+          }
+
+          childContainer.innerHTML = `
+            <div class="tree-node" style="padding-left: ${(level + 1) * 14 + 6}px; color: var(--text-muted);">
+              <span class="node-icon">⏳</span>
+              <span>正在展开...</span>
+            </div>
+          `;
+
+          try {
+            const resp = await this.listDir(folderPath);
+            if (!resp.success) {
+              childContainer.innerHTML = `
+                <div class="tree-node" style="padding-left: ${(level + 1) * 14 + 6}px; color: #f48771;">
+                  <span class="node-icon">⚠️</span>
+                  <span>读取失败: ${resp.error || ''}</span>
+                </div>
+              `;
+              return;
+            }
+
+            const entries = resp.entries || [];
+            entries.sort((a, b) => {
+              if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            });
+
+            childContainer.innerHTML = '';
+            childContainer.dataset.loaded = 'true';
+
+            if (entries.length === 0) {
+              childContainer.innerHTML = `
+                <div class="tree-node" style="padding-left: ${(level + 1) * 14 + 6}px; color: var(--text-muted);">
+                  <span class="node-icon">📂</span>
+                  <span>空文件夹</span>
+                </div>
+              `;
+              return;
+            }
+
+            for (const item of entries) {
+              const fullPath = folderPath.endsWith('/') ? `${folderPath}${item.name}` : `${folderPath}/${item.name}`;
+              this.renderTreeNode(item, fullPath, childContainer, level + 1);
+            }
+          } catch (err) {
+            childContainer.innerHTML = `
+              <div class="tree-node" style="padding-left: ${(level + 1) * 14 + 6}px; color: #f48771;">
+                <span class="node-icon">⚠️</span>
+                <span>展开超时</span>
+              </div>
+            `;
+          }
+        },
+
         async openFile(path, targetLine = 1) {
           if (!path) return;
           console.log('[Editor] openFile:', path, 'line:', targetLine);
@@ -824,6 +1043,15 @@
           if (this.tabs.has(path)) {
             this.switchTab(path, targetLine);
             return;
+          }
+
+          // VS Code preview tab logic: if active tab is unpinned and not dirty, replace it!
+          let reuseTabPath = null;
+          if (this.activePath && this.tabs.has(this.activePath)) {
+            const activeTab = this.tabs.get(this.activePath);
+            if (!activeTab.isPinned && !activeTab.isDirty) {
+              reuseTabPath = this.activePath;
+            }
           }
 
           this.showToast('正在读取 ' + (path.split('/').pop() || path));
@@ -835,16 +1063,48 @@
             }
 
             const name = path.split('/').pop() || path;
+            const isImg = /\.(png|jpg|jpeg|gif|webp|svg|ico)$/i.test(path);
+            let model = null;
+
+            if (!isImg && this.monacoReady && typeof monaco !== 'undefined') {
+              const lang = this.getLanguageId(path);
+              model = monaco.editor.createModel(resp.content || '', lang, monaco.Uri.file(path));
+              model.onDidChangeContent(() => {
+                const current = model.getValue();
+                const tabData = this.tabs.get(path);
+                if (tabData) {
+                  tabData.isDirty = (current !== tabData.originalContent);
+                  const tabBar = document.getElementById('tab-bar');
+                  const tabEl = Array.from(tabBar.children).find(el => el.dataset.path === path);
+                  if (tabEl) {
+                    tabEl.classList.toggle('dirty', tabData.isDirty);
+                    if (tabData.isDirty) {
+                      tabData.isPinned = true;
+                      tabEl.classList.remove('preview');
+                      tabEl.classList.add('pinned');
+                    }
+                  }
+                }
+              });
+            }
+
             const tabData = {
               path,
               name,
+              model,
               content: resp.content || '',
               originalContent: resp.content || '',
               isDirty: false,
-              isPinned: false,
+              isPinned: false, // Default to preview tab unless pinned
               isBinary: !!resp.isBinary,
-              size: resp.size || 0
+              size: resp.size || 0,
+              viewState: null
             };
+
+            // If reusing unpinned preview tab, close old one first
+            if (reuseTabPath) {
+              this.closeTab(reuseTabPath, true);
+            }
 
             this.tabs.set(path, tabData);
             this.createTabElement(tabData);
@@ -857,7 +1117,7 @@
         createTabElement(tabData) {
           const tabBar = document.getElementById('tab-bar');
           const tab = document.createElement('div');
-          tab.className = 'tab-item';
+          tab.className = 'tab-item preview';
           tab.dataset.path = tabData.path;
           tab.title = tabData.path;
           tab.innerHTML = `
@@ -875,13 +1135,16 @@
             this.switchTab(tabData.path);
           });
 
+          // Middle click to close
           tab.addEventListener('auxclick', e => {
             if (e.button === 1) this.closeTab(tabData.path);
           });
 
+          // Double click to pin tab
           tab.addEventListener('dblclick', () => {
             tabData.isPinned = !tabData.isPinned;
             tab.classList.toggle('pinned', tabData.isPinned);
+            tab.classList.toggle('preview', !tabData.isPinned);
           });
 
           tabBar.appendChild(tab);
@@ -890,6 +1153,14 @@
         switchTab(path, targetLine = 1) {
           const tabData = this.tabs.get(path);
           if (!tabData) return;
+
+          // Save view state of previous tab
+          if (this.activePath && this.tabs.has(this.activePath)) {
+            const prevTab = this.tabs.get(this.activePath);
+            if (prevTab && this.editor && prevTab.model) {
+              prevTab.viewState = this.editor.saveViewState();
+            }
+          }
 
           this.activePath = path;
 
@@ -900,13 +1171,14 @@
 
           document.getElementById('empty-state').style.display = 'none';
 
-          const editorWrapper = document.getElementById('editor-wrapper');
+          const monacoContainer = document.getElementById('monaco-container');
+          const fallbackWrapper = document.getElementById('fallback-wrapper');
           const imageWrapper = document.getElementById('image-wrapper');
-          const textarea = document.getElementById('editor-textarea');
 
           const isImg = /\.(png|jpg|jpeg|gif|webp|svg|ico)$/i.test(path);
           if (isImg && tabData.isBinary) {
-            editorWrapper.style.display = 'none';
+            monacoContainer.style.display = 'none';
+            fallbackWrapper.style.display = 'none';
             imageWrapper.style.display = 'flex';
             const img = document.getElementById('image-element');
             const mime = path.endsWith('.png') ? 'image/png' :
@@ -917,29 +1189,51 @@
             img.onload = () => {
               document.getElementById('image-info').textContent = `${img.naturalWidth} × ${img.naturalHeight} px (${this.formatSize(tabData.size)})`;
             };
-          } else {
+            document.getElementById('status-lang').textContent = 'Image';
+          } else if (this.monacoReady && this.editor && tabData.model) {
             imageWrapper.style.display = 'none';
-            editorWrapper.style.display = 'flex';
-            textarea.value = tabData.content;
-            this.updateLineNumbers();
+            fallbackWrapper.style.display = 'none';
+            monacoContainer.style.display = 'block';
 
+            this.editor.setModel(tabData.model);
+            if (tabData.viewState) {
+              this.editor.restoreViewState(tabData.viewState);
+            }
             if (targetLine > 1) {
               this.jumpToLine(targetLine);
             }
+            this.editor.focus();
+            document.getElementById('status-lang').textContent = this.getLanguageName(path);
+          } else {
+            // Fallback textarea mode
+            monacoContainer.style.display = 'none';
+            imageWrapper.style.display = 'none';
+            fallbackWrapper.style.display = 'flex';
+
+            const textarea = document.getElementById('fallback-textarea');
+            textarea.value = tabData.content;
+            this.updateFallbackLineNumbers();
+            if (targetLine > 1) {
+              this.jumpToLineFallback(targetLine);
+            }
+            document.getElementById('status-lang').textContent = this.getLanguageName(path);
           }
 
           document.getElementById('status-path').textContent = path;
-          document.getElementById('status-lang').textContent = this.getLanguageName(path);
         },
 
-        closeTab(path) {
+        closeTab(path, silent = false) {
           const tabData = this.tabs.get(path);
           if (!tabData) return;
 
-          if (tabData.isDirty) {
+          if (!silent && tabData.isDirty) {
             if (!confirm(`文件 "${tabData.name}" 已修改但尚未保存，确定要关闭吗？`)) {
               return;
             }
+          }
+
+          if (tabData.model) {
+            tabData.model.dispose();
           }
 
           this.tabs.delete(path);
@@ -953,10 +1247,12 @@
               this.switchTab(remaining[remaining.length - 1]);
             } else {
               this.activePath = null;
-              document.getElementById('editor-wrapper').style.display = 'none';
+              document.getElementById('monaco-container').style.display = 'none';
+              document.getElementById('fallback-wrapper').style.display = 'none';
               document.getElementById('image-wrapper').style.display = 'none';
               document.getElementById('empty-state').style.display = 'flex';
               document.getElementById('status-path').textContent = '/';
+              document.getElementById('status-lang').textContent = 'Plain Text';
             }
           }
         },
@@ -966,8 +1262,12 @@
           const tabData = this.tabs.get(this.activePath);
           if (!tabData) return;
 
-          const textarea = document.getElementById('editor-textarea');
-          const content = textarea.value;
+          let content = '';
+          if (this.monacoReady && tabData.model) {
+            content = tabData.model.getValue();
+          } else {
+            content = document.getElementById('fallback-textarea').value;
+          }
 
           this.showToast('正在保存...');
           try {
@@ -991,7 +1291,16 @@
         },
 
         jumpToLine(line) {
-          const textarea = document.getElementById('editor-textarea');
+          if (this.editor) {
+            this.editor.revealLineInCenter(line);
+            this.editor.setPosition({ lineNumber: line, column: 1 });
+            this.editor.focus();
+            document.getElementById('status-pos').textContent = `Ln ${line}, Col 1`;
+          }
+        },
+
+        jumpToLineFallback(line) {
+          const textarea = document.getElementById('fallback-textarea');
           const lines = textarea.value.split('\n');
           let pos = 0;
           for (let i = 0; i < line - 1 && i < lines.length; i++) {
@@ -999,30 +1308,18 @@
           }
           textarea.setSelectionRange(pos, pos);
           textarea.focus();
-          const lineHeight = 20.25;
-          textarea.scrollTop = Math.max(0, (line - 5) * lineHeight);
-          this.updateCursorPos();
+          textarea.scrollTop = Math.max(0, (line - 5) * 20.25);
         },
 
-        updateLineNumbers() {
-          const textarea = document.getElementById('editor-textarea');
-          const lineNums = document.getElementById('line-numbers');
+        updateFallbackLineNumbers() {
+          const textarea = document.getElementById('fallback-textarea');
+          const lineNums = document.getElementById('fallback-line-numbers');
           const lines = textarea.value.split('\n').length;
           let html = '';
           for (let i = 1; i <= lines; i++) {
             html += i + '<br>';
           }
           lineNums.innerHTML = html;
-        },
-
-        updateCursorPos() {
-          const textarea = document.getElementById('editor-textarea');
-          const selStart = textarea.selectionStart;
-          const textBefore = textarea.value.substring(0, selStart);
-          const lines = textBefore.split('\n');
-          const curLine = lines.length;
-          const curCol = lines[lines.length - 1].length + 1;
-          document.getElementById('status-pos').textContent = `Ln ${curLine}, Col ${curCol}`;
         },
 
         showToast(msg) {
@@ -1033,6 +1330,45 @@
           this.toastTimer = setTimeout(() => {
             toast.classList.remove('show');
           }, 2500);
+        },
+
+        getLanguageId(path) {
+          const ext = (path.split('.').pop() || '').toLowerCase();
+          const map = {
+            'c': 'c', 'h': 'c',
+            'cpp': 'cpp', 'hpp': 'cpp', 'cc': 'cpp', 'cxx': 'cpp',
+            'py': 'python', 'pyw': 'python',
+            'js': 'javascript', 'mjs': 'javascript', 'cjs': 'javascript',
+            'ts': 'typescript', 'tsx': 'typescript',
+            'java': 'java',
+            'go': 'go',
+            'rs': 'rust',
+            'sh': 'shell', 'bash': 'shell', 'zsh': 'shell',
+            'json': 'json',
+            'md': 'markdown', 'markdown': 'markdown',
+            'html': 'html', 'htm': 'html',
+            'css': 'css', 'scss': 'scss', 'less': 'less',
+            'xml': 'xml', 'svg': 'xml',
+            'yaml': 'yaml', 'yml': 'yaml',
+            'sql': 'sql',
+            'php': 'php',
+            'rb': 'ruby',
+            'lua': 'lua',
+            'ini': 'ini', 'conf': 'ini'
+          };
+          return map[ext] || 'plaintext';
+        },
+
+        getLanguageName(path) {
+          const langId = this.getLanguageId(path);
+          const names = {
+            'c': 'C', 'cpp': 'C++', 'python': 'Python', 'javascript': 'JavaScript',
+            'typescript': 'TypeScript', 'java': 'Java', 'go': 'Go', 'rust': 'Rust',
+            'shell': 'Shell Script', 'json': 'JSON', 'markdown': 'Markdown',
+            'html': 'HTML', 'css': 'CSS', 'xml': 'XML', 'yaml': 'YAML',
+            'sql': 'SQL', 'php': 'PHP', 'plaintext': 'Plain Text'
+          };
+          return names[langId] || 'Plain Text';
         },
 
         getFileIcon(name, isDir) {
@@ -1050,21 +1386,6 @@
           return '📄';
         },
 
-        getLanguageName(path) {
-          if (/\.(c|h)$/i.test(path)) return 'C / C++';
-          if (/\.(cpp|hpp|cc|cxx)$/i.test(path)) return 'C++';
-          if (/\.(js|jsx)$/i.test(path)) return 'JavaScript';
-          if (/\.(ts|tsx)$/i.test(path)) return 'TypeScript';
-          if (/\.py$/i.test(path)) return 'Python';
-          if (/\.html$/i.test(path)) return 'HTML';
-          if (/\.css$/i.test(path)) return 'CSS';
-          if (/\.json$/i.test(path)) return 'JSON';
-          if (/\.md$/i.test(path)) return 'Markdown';
-          if (/\.sh$/i.test(path)) return 'Shell Script';
-          if (/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(path)) return 'Image';
-          return 'Plain Text';
-        },
-
         formatSize(bytes) {
           if (!bytes || bytes <= 0) return '0 B';
           if (bytes < 1024) return bytes + ' B';
@@ -1073,7 +1394,7 @@
         }
       };
 
-      // 2. UI Bindings
+      // 3. UI Bindings
       document.getElementById('btn-close').addEventListener('click', () => {
         bridge.send({ cmd: 'close' });
       });
@@ -1129,15 +1450,14 @@
         }
       });
 
-      const textarea = document.getElementById('editor-textarea');
-      const lineNums = document.getElementById('line-numbers');
-
-      textarea.addEventListener('input', () => {
-        bridge.updateLineNumbers();
+      // Fallback textarea listeners
+      const fallbackTextarea = document.getElementById('fallback-textarea');
+      fallbackTextarea.addEventListener('input', () => {
+        bridge.updateFallbackLineNumbers();
         if (bridge.activePath) {
           const tabData = bridge.tabs.get(bridge.activePath);
           if (tabData) {
-            tabData.content = textarea.value;
+            tabData.content = fallbackTextarea.value;
             tabData.isDirty = (tabData.content !== tabData.originalContent);
             const tabBar = document.getElementById('tab-bar');
             const tabEl = Array.from(tabBar.children).find(el => el.dataset.path === tabData.path);
@@ -1146,13 +1466,7 @@
         }
       });
 
-      textarea.addEventListener('scroll', () => {
-        lineNums.scrollTop = textarea.scrollTop;
-      });
-
-      textarea.addEventListener('keyup', () => bridge.updateCursorPos());
-      textarea.addEventListener('click', () => bridge.updateCursorPos());
-
+      // Resizer Drag Logic
       const resizer = document.getElementById('sidebar-resizer');
       const sidebar = document.getElementById('sidebar');
       let isResizing = false;
