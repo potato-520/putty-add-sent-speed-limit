@@ -2274,7 +2274,7 @@ static void get_session_wsl_distro(WebViewSession *sess, char *out_distro, size_
     out_distro[0] = '\0';
     if (sess && sess->cfg) {
         /* Check CONF_remote_cmd e.g. "wsl.exe -d Ubuntu ~" */
-        const char *rcmd = conf_get_str(sess->cfg, CONF_remote_cmd);
+        const char *rcmd = conf_get_str_ambi(sess->cfg, CONF_remote_cmd, NULL);
         if (rcmd && *rcmd) {
             const char *d = strstr(rcmd, "-d ");
             if (d) {
@@ -3142,7 +3142,7 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
             /* It's a ConPTY session.  Consider it WSL if either:
                - a distro name was resolved (from cmd line / host / registry), or
                - the remote_cmd contains "wsl"                                */
-            const char *rcmd = conf_get_str(sess->cfg, CONF_remote_cmd);
+            const char *rcmd = conf_get_str_ambi(sess->cfg, CONF_remote_cmd, NULL);
             const char *host  = conf_get_str(sess->cfg, CONF_host);
             if (distro[0] ||
                 (rcmd && strstr(rcmd, "wsl")) ||
