@@ -2501,6 +2501,7 @@ static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
         webview_host_send_to_window(ed->hwnd, err_msg);
     }
 
+    ed->worker_running = false;
     dbg_log("sftp_reader_thread_proc: exited for hwnd=%p", (void*)ed->hwnd);
     return 0;
 }
@@ -2665,7 +2666,7 @@ static bool sftp_worker_start(WebViewEditorWindow *ed)
     const char *keyfile = keyfn ? filename_to_str(keyfn) : "";
 
     char cmdline[2048];
-    int len = snprintf(cmdline, sizeof(cmdline), "\"%s\" -rpc -batch", psftp_path);
+    int len = snprintf(cmdline, sizeof(cmdline), "\"%s\" -rpc -batch -share", psftp_path);
 
     if (port > 0 && port != 22) {
         len += snprintf(cmdline + len, sizeof(cmdline) - len, " -P %d", port);
@@ -2890,6 +2891,14 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
 static LRESULT CALLBACK WebViewEditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_WEBVIEW_POST_MSG: {
+        char *str = (char *)lParam;
+        if (str) {
+            webview_host_send_to_window(hwnd, str);
+            free(str);
+        }
+        return 0;
+    }
     case WM_SIZE:
         webview_host_resize(hwnd);
         return 0;
@@ -3778,6 +3787,14 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
 static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_WEBVIEW_POST_MSG: {
+        char *str = (char *)lParam;
+        if (str) {
+            webview_host_send_to_window(hwnd, str);
+            free(str);
+        }
+        return 0;
+    }
     case WM_NETEVENT:
     case WM_DONE_WITH_SOCKET:
         winselgui_response(msg, wParam, lParam);

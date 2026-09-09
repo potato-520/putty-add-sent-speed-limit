@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <stdbool.h>
 
+#define WM_WEBVIEW_POST_MSG (WM_USER + 1024)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

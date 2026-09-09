@@ -111,13 +111,29 @@ void webview_host_close(HWND hwnd)
 void webview_host_send_to_window(HWND hwnd, const char *msg)
 {
     if (!msg || !hwnd) return;
+
+    DWORD targetThreadId = GetWindowThreadProcessId(hwnd, NULL);
+    DWORD currentThreadId = GetCurrentThreadId();
+    if (targetThreadId != 0 && targetThreadId != currentThreadId) {
+        char *copy = _strdup(msg);
+        if (copy) {
+            if (!PostMessageW(hwnd, WM_WEBVIEW_POST_MSG, 0, (LPARAM)copy)) {
+                free(copy);
+            }
+        }
+        return;
+    }
+
     auto it = s_windows.find(hwnd);
     if (it == s_windows.end()) return;
     auto win = it->second;
 
     std::wstring wmsg = Utf8ToWide(msg);
     if (win->ready && win->webview) {
-        win->webview->PostWebMessageAsString(wmsg.c_str());
+        HRESULT hr = win->webview->PostWebMessageAsString(wmsg.c_str());
+        if (FAILED(hr)) {
+            win->pending_messages.push_back(wmsg);
+        }
     } else {
         win->pending_messages.push_back(wmsg);
     }

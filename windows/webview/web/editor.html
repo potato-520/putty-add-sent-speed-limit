@@ -1028,6 +1028,7 @@
         tabs: new Map(),
         activePath: null,
         pendingOpenFile: null,
+        sftpReady: false,
         logs: [],
 
         log(level, tag, message) {
@@ -1268,12 +1269,18 @@
                 break;
 
               case 'sftp_ready':
+                this.sftpReady = true;
                 this.homedir = msg.homedir || '/';
                 this.currentDir = this.homedir;
                 document.getElementById('status-conn').textContent = `● SFTP 就绪 (${this.host})`;
                 document.getElementById('sidebar-path-input').value = this.currentDir;
                 this.log('info', 'SFTP', `SFTP 引擎认证成功就绪，初始主目录: ${this.homedir}`);
                 this.loadDirectory(this.currentDir);
+                if (this.pendingOpenFile) {
+                  const { path, line } = this.pendingOpenFile;
+                  this.pendingOpenFile = null;
+                  this.openFile(path, line);
+                }
                 break;
 
               case 'sftp_error':
@@ -1295,8 +1302,11 @@
 
               case 'open_file':
                 this.log('info', 'OPEN', `打开文件请求: ${msg.path} (line ${msg.line || 1})`);
-                if (!this.monacoReady && typeof require !== 'undefined') {
+                if (!this.sftpReady || (!this.monacoReady && typeof require !== 'undefined')) {
                   this.pendingOpenFile = { path: msg.path, line: msg.line };
+                  if (!this.sftpReady) {
+                    this.log('info', 'SFTP', `SFTP 尚未就绪，排队等待握手完成: ${msg.path}`);
+                  }
                 } else {
                   this.openFile(msg.path, msg.line);
                 }
@@ -1516,6 +1526,11 @@
 
         async openFile(path, targetLine = 0) {
           if (!path) return;
+          if (!this.sftpReady) {
+            this.log('info', 'SFTP', `SFTP 尚未就绪，排队等待打开: ${path}`);
+            this.pendingOpenFile = { path, line: targetLine };
+            return;
+          }
           console.log('[Editor] openFile:', path, 'line:', targetLine);
 
           if (this.tabs.has(path)) {
