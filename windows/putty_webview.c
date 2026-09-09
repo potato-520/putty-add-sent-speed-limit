@@ -46,24 +46,96 @@ static wchar_t global_html_path[MAX_PATH] = {0};
 static wchar_t global_editor_html_path[MAX_PATH] = {0};
 static wchar_t target_web_dir[MAX_PATH] = {0};
 
+#define MEM_LOG_MAX_LINES 1000
+static char *g_mem_log_ring[MEM_LOG_MAX_LINES] = {0};
+static size_t g_mem_log_head = 0;
+static size_t g_mem_log_count = 0;
+static CRITICAL_SECTION g_mem_log_cs;
+static volatile LONG g_mem_log_cs_state = 0;
+
+static void mem_log_ensure_init(void)
+{
+    if (InterlockedCompareExchange(&g_mem_log_cs_state, 1, 0) == 0) {
+        InitializeCriticalSection(&g_mem_log_cs);
+        InterlockedExchange(&g_mem_log_cs_state, 2);
+
+        // Clean up any stale debug log file left on disk
+        char temp[MAX_PATH];
+        if (GetTempPathA(MAX_PATH, temp)) {
+            char old_log[MAX_PATH];
+            snprintf(old_log, sizeof(old_log), "%sputty_webview_debug.log", temp);
+            DeleteFileA(old_log);
+        }
+    } else {
+        while (g_mem_log_cs_state != 2) {
+            Sleep(1);
+        }
+    }
+}
+
 static void dbg_log(const char *fmt, ...)
 {
-    char temp[MAX_PATH];
-    GetTempPathA(MAX_PATH, temp);
-    char logpath[MAX_PATH];
-    snprintf(logpath, sizeof(logpath), "%sputty_webview_debug.log", temp);
+    mem_log_ensure_init();
 
-    FILE *f = fopen(logpath, "a");
-    if (!f) return;
+    char buf[2048];
     SYSTEMTIME st;
     GetLocalTime(&st);
-    fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    int prefix_len = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d.%03d] ",
+                              st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(f, fmt, ap);
+    int needed = vsnprintf(buf + prefix_len, sizeof(buf) - prefix_len, fmt, ap);
     va_end(ap);
-    fprintf(f, "\n");
-    fclose(f);
+
+    char *allocated = NULL;
+    char *final_str = buf;
+    if (needed >= (int)(sizeof(buf) - prefix_len)) {
+        size_t total_sz = prefix_len + needed + 1;
+        allocated = (char*)malloc(total_sz);
+        if (allocated) {
+            memcpy(allocated, buf, prefix_len);
+            va_start(ap, fmt);
+            vsnprintf(allocated + prefix_len, needed + 1, fmt, ap);
+            va_end(ap);
+            final_str = allocated;
+        }
+    }
+
+    OutputDebugStringA(final_str);
+    OutputDebugStringA("\n");
+
+    EnterCriticalSection(&g_mem_log_cs);
+    if (g_mem_log_ring[g_mem_log_head]) {
+        free(g_mem_log_ring[g_mem_log_head]);
+        g_mem_log_ring[g_mem_log_head] = NULL;
+    }
+    g_mem_log_ring[g_mem_log_head] = allocated ? allocated : _strdup(final_str);
+    g_mem_log_head = (g_mem_log_head + 1) % MEM_LOG_MAX_LINES;
+    if (g_mem_log_count < MEM_LOG_MAX_LINES) {
+        g_mem_log_count++;
+    }
+    LeaveCriticalSection(&g_mem_log_cs);
+}
+
+static void mem_log_dump_to_strbuf(strbuf *sb)
+{
+    mem_log_ensure_init();
+    EnterCriticalSection(&g_mem_log_cs);
+    if (g_mem_log_count == 0) {
+        const char *empty_msg = "(暂无宿主内存日志)\n";
+        put_data(sb, empty_msg, strlen(empty_msg));
+    } else {
+        size_t start = (g_mem_log_count < MEM_LOG_MAX_LINES) ? 0 : g_mem_log_head;
+        for (size_t i = 0; i < g_mem_log_count; i++) {
+            size_t idx = (start + i) % MEM_LOG_MAX_LINES;
+            if (g_mem_log_ring[idx]) {
+                put_data(sb, g_mem_log_ring[idx], strlen(g_mem_log_ring[idx]));
+                put_byte(sb, '\n');
+            }
+        }
+    }
+    LeaveCriticalSection(&g_mem_log_cs);
 }
 
 #define IDR_WEB_INDEX_HTML          2001
@@ -2791,28 +2863,8 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
     }
 
     if (strstr(message, "\"cmd\":\"get_host_log\"") || strstr(message, "\"cmd\": \"get_host_log\"")) {
-        char temp[MAX_PATH];
-        GetTempPathA(MAX_PATH, temp);
-        char logpath[MAX_PATH];
-        snprintf(logpath, sizeof(logpath), "%sputty_webview_debug.log", temp);
-
         strbuf *log_sb = strbuf_new_nm();
-        FILE *f = fopen(logpath, "r");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long fsz = ftell(f);
-            long read_offset = (fsz > 64 * 1024) ? (fsz - 64 * 1024) : 0;
-            fseek(f, read_offset, SEEK_SET);
-
-            char line[1024];
-            while (fgets(line, sizeof(line), f)) {
-                put_data(log_sb, line, strlen(line));
-            }
-            fclose(f);
-        } else {
-            const char *notfound = "(未找到宿主日志文件)\n";
-            put_data(log_sb, notfound, strlen(notfound));
-        }
+        mem_log_dump_to_strbuf(log_sb);
 
         strbuf *resp = strbuf_new_nm();
         put_fmt(resp, "{\"cmd\":\"host_log_resp\",\"content\":");

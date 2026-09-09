@@ -827,7 +827,7 @@
   <div id="log-modal" class="hidden">
     <div class="log-header">
       <div class="log-title">
-        <span>📋</span> SFTP 引擎与通信日志
+        <span>📋</span> 内存运行日志 (最近1000行)
       </div>
       <div class="log-tools">
         <label style="font-size: 11px; font-weight: normal; display: flex; align-items: center; gap: 4px; color: #aaa; cursor: pointer; margin-right: 6px;">
@@ -1031,24 +1031,47 @@
         logs: [],
 
         log(level, tag, message) {
+          this.logLines([{ level, tag, message }]);
+        },
+
+        logLines(items) {
+          if (!items || items.length === 0) return;
           const now = new Date();
           const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
-          const item = { time: timeStr, level, tag, message };
-          this.logs.push(item);
-          if (this.logs.length > 1000) this.logs.shift();
 
           const container = document.getElementById('log-container');
-          if (container) {
-            const line = document.createElement('div');
-            line.className = 'log-line';
-            line.innerHTML = `<span class="log-time">[${timeStr}]</span> <span class="log-tag-${level}">[${tag}]</span> ${this.escapeHtml(message)}`;
-            container.appendChild(line);
+          const fragment = container ? document.createDocumentFragment() : null;
+          let hasError = false;
+
+          for (const item of items) {
+            const tStr = item.time || timeStr;
+            const fullItem = { time: tStr, level: item.level, tag: item.tag, message: item.message };
+            this.logs.push(fullItem);
+            if (item.level === 'error') hasError = true;
+
+            if (fragment) {
+              const lineEl = document.createElement('div');
+              lineEl.className = 'log-line';
+              lineEl.innerHTML = `<span class="log-time">[${tStr}]</span> <span class="log-tag-${item.level}">[${item.tag}]</span> ${this.escapeHtml(item.message)}`;
+              fragment.appendChild(lineEl);
+            }
+          }
+
+          while (this.logs.length > 1000) {
+            this.logs.shift();
+          }
+
+          if (container && fragment) {
+            container.appendChild(fragment);
+            while (container.children.length > 1000) {
+              container.removeChild(container.firstElementChild);
+            }
             if (document.getElementById('chk-log-autoscroll')?.checked !== false) {
               container.scrollTop = container.scrollHeight;
             }
           }
 
-          if (level === 'error') {
+          if (hasError) {
             const badge = document.getElementById('log-badge');
             if (badge) badge.style.display = 'inline';
             const statBadge = document.getElementById('status-log-btn');
@@ -1206,7 +1229,21 @@
             console.log('[Editor IPC Recv]', msg.cmd, msg);
 
             if (msg.cmd === 'host_log_resp') {
-              this.log('host', 'HOST LOG', msg.content || '(宿主调试日志为空)');
+              const raw = (msg.content || '').trim();
+              if (!raw) {
+                this.log('host', 'HOST', '(宿主内存日志为空)');
+                return;
+              }
+              const lines = raw.split('\n');
+              const items = [];
+              items.push({ level: 'host', tag: 'HOST', message: `=== 宿主内存日志 (共 ${lines.length} 行，内存环形保留最近 1000 行) ===` });
+              for (const l of lines) {
+                const trimmed = l.trim();
+                if (trimmed) {
+                  items.push({ level: 'host', tag: 'HOST', message: trimmed });
+                }
+              }
+              this.logLines(items);
               return;
             }
 
