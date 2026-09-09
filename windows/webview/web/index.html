@@ -858,6 +858,13 @@
 
   <!-- Custom Dropdown Menu for Toolbox -->
   <div id="toolbox-menu" class="context-menu" style="display: none; min-width: 250px;">
+    <div class="menu-item" data-action="open-editor">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+      </svg>
+      <span>打开远程文件浏览器 (SFTP File Browser)</span>
+    </div>
+    <div class="menu-divider"></div>
     <div class="menu-item" data-action="open-mle">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -1203,6 +1210,8 @@
           if (contextMenuEl) contextMenuEl.style.display = 'none';
           hideToolboxMenu();
           if (!isVisible && toolboxMenuEl) {
+            this.setActiveGroup(gid);
+            toolboxMenuEl.dataset.gid = gid;
             const rect = btnToolbox.getBoundingClientRect();
             toolboxMenuEl.style.top = `${rect.bottom + 4}px`;
             const menuWidth = 260;
@@ -2356,13 +2365,22 @@
         if (!item) return;
         const action = item.getAttribute('data-action');
         hideToolboxMenu();
-        if (action === 'strip-log-ansi') {
+        if (action === 'open-editor') {
+          const gid = toolboxMenuEl.dataset.gid || dockManager.activeGroupId;
+          const sid = (gid && dockManager.groups[gid]) ? dockManager.groups[gid].activeSessionId : activeGlobalSessionId;
+          if (sid) {
+            sendToHost('3', `${sid}:open_editor`);
+          } else {
+            alert('请先选择或连接一个终端会话。');
+          }
+        } else if (action === 'strip-log-ansi') {
           sendToHost('3', 'strip_log_ansi');
         } else if (action === 'fix-ssh-key-perm') {
           sendToHost('3', 'fix_ssh_key_perm');
         } else if (action === 'open-mle') {
-          if (dockManager.activeGroupId && dockManager.groups[dockManager.activeGroupId]) {
-            const sid = dockManager.groups[dockManager.activeGroupId].activeSessionId;
+          const gid = toolboxMenuEl.dataset.gid || dockManager.activeGroupId;
+          if (gid && dockManager.groups[gid]) {
+            const sid = dockManager.groups[gid].activeSessionId;
             if (sid) openMultiLineEditor(sid);
           } else if (activeGlobalSessionId) {
             openMultiLineEditor(activeGlobalSessionId);

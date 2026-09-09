@@ -3930,7 +3930,15 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             session_clone(hwnd, sess_id);
         } else if (strstr(payload, ":open_editor")) {
             int sess_id = atoi(payload);
-            editor_window_open(sess_id, NULL, 0);
+            WebViewSession *sess = session_find(sess_id);
+            if (sess) {
+                int proto = conf_get_int(sess->cfg, CONF_protocol);
+                if (proto != PROT_SSH) {
+                    MessageBox(hwnd, "当前会话不是 SSH 协议，文件浏览器仅支持 SSH / SFTP 会话。", "提示", MB_OK | MB_ICONINFORMATION);
+                } else {
+                    editor_window_open(sess_id, NULL, 0);
+                }
+            }
         } else if (strstr(payload, ":detach")) {
             int sess_id = 0, screen_x = 0, screen_y = 0;
             if (sscanf(payload, "%d:detach:%d:%d", &sess_id, &screen_x, &screen_y) >= 1) {
