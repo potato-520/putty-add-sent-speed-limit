@@ -18,6 +18,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <aclapi.h>
 #include <sddl.h>
 #include <wincrypt.h>
@@ -1515,6 +1516,62 @@ static void json_escape_to_strbuf(strbuf *dst, const char *src)
     put_byte(dst, '"');
 }
 
+static bool json_extract_str(const char *json, const char *key, char *dst, size_t dst_sz)
+{
+    if (!json || !key || !dst || dst_sz == 0) return false;
+    dst[0] = '\0';
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return false;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return false;
+    p++;
+    size_t out = 0;
+    while (*p && *p != '"' && out + 1 < dst_sz) {
+        if (*p == '\\' && *(p+1)) {
+            p++;
+            if (*p == 'n') dst[out++] = '\n';
+            else if (*p == 'r') dst[out++] = '\r';
+            else if (*p == 't') dst[out++] = '\t';
+            else if (*p == '\\') dst[out++] = '\\';
+            else if (*p == '"') dst[out++] = '"';
+            else dst[out++] = *p;
+        } else {
+            dst[out++] = *p;
+        }
+        p++;
+    }
+    dst[out] = '\0';
+    return true;
+}
+
+static bool json_extract_bool(const char *json, const char *key)
+{
+    if (!json || !key) return false;
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return false;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == ':') p++;
+    if (!strncmp(p, "true", 4)) return true;
+    return false;
+}
+
+static int json_extract_int(const char *json, const char *key)
+{
+    if (!json || !key) return 0;
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return 0;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == ':') p++;
+    return atoi(p);
+}
+
 static void parse_auth_json(const char *json,
                             char *out_user, size_t user_sz,
                             char *out_pass, size_t pass_sz,
@@ -2993,6 +3050,121 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
             webview_host_send_to_window(hwnd, open_cmd);
             ed->pending_file[0] = '\0';
             ed->pending_line = 0;
+        }
+        return;
+    }
+
+    if (strstr(message, "\"cmd\":\"sftp_download_prompt\"") || strstr(message, "\"cmd\": \"sftp_download_prompt\"")) {
+        char remote_path[1024] = {0};
+        char default_name[512] = {0};
+        bool is_dir = json_extract_bool(message, "isDirectory");
+        int req_id = json_extract_int(message, "reqId");
+        json_extract_str(message, "remotePath", remote_path, sizeof(remote_path));
+        json_extract_str(message, "defaultName", default_name, sizeof(default_name));
+
+        if (!remote_path[0]) {
+            dbg_log("sftp_download_prompt: empty remotePath");
+            return;
+        }
+
+        if (!default_name[0]) {
+            const char *p1 = strrchr(remote_path, '/');
+            const char *p2 = strrchr(remote_path, '\\');
+            const char *last_sep = (p1 > p2) ? p1 : p2;
+            if (last_sep && *(last_sep + 1)) {
+                strncpy(default_name, last_sep + 1, sizeof(default_name) - 1);
+            } else {
+                strncpy(default_name, is_dir ? "folder" : "downloaded_file", sizeof(default_name) - 1);
+            }
+        }
+
+        wchar_t local_target_w[MAX_PATH] = {0};
+
+        if (is_dir) {
+            BROWSEINFOW bi = {0};
+            bi.hwndOwner = hwnd;
+            bi.lpszTitle = L"选择保存目标文件夹的位置";
+            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+            PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+            if (!pidl) {
+                dbg_log("sftp_download_prompt: folder browse cancelled by user");
+                return;
+            }
+            wchar_t selected_dir[MAX_PATH] = {0};
+            BOOL ok = SHGetPathFromIDListW(pidl, selected_dir);
+            CoTaskMemFree(pidl);
+            if (!ok || !selected_dir[0]) {
+                dbg_log("sftp_download_prompt: SHGetPathFromIDListW failed");
+                return;
+            }
+
+            wchar_t w_defname[MAX_PATH] = {0};
+            MultiByteToWideChar(CP_UTF8, 0, default_name, -1, w_defname, MAX_PATH);
+
+            size_t slen = wcslen(selected_dir);
+            if (slen > 0 && (selected_dir[slen - 1] == L'\\' || selected_dir[slen - 1] == L'/')) {
+                _snwprintf(local_target_w, MAX_PATH, L"%s%s", selected_dir, w_defname);
+            } else {
+                _snwprintf(local_target_w, MAX_PATH, L"%s\\%s", selected_dir, w_defname);
+            }
+        } else {
+            wchar_t file_buf[MAX_PATH] = {0};
+            if (default_name[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, default_name, -1, file_buf, MAX_PATH);
+            }
+            OPENFILENAMEW ofn;
+            ZeroMemory(&ofn, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFile = file_buf;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+
+            if (!GetSaveFileNameW(&ofn)) {
+                dbg_log("sftp_download_prompt: file save dialog cancelled by user");
+                return;
+            }
+            wcsncpy(local_target_w, file_buf, MAX_PATH - 1);
+        }
+
+        char local_target_utf8[MAX_PATH * 3] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, local_target_w, -1, local_target_utf8, sizeof(local_target_utf8), NULL, NULL);
+
+        char esc_remote[2048];
+        char esc_local[MAX_PATH * 6];
+        json_escape_string(remote_path, esc_remote, sizeof(esc_remote));
+        json_escape_string(local_target_utf8, esc_local, sizeof(esc_local));
+
+        char start_msg[MAX_PATH * 8 + 256];
+        snprintf(start_msg, sizeof(start_msg),
+                 "{\"cmd\":\"sftp_download_started\",\"remotePath\":\"%s\",\"localPath\":\"%s\",\"isDirectory\":%s}",
+                 esc_remote, esc_local, is_dir ? "true" : "false");
+        webview_host_send_to_window(hwnd, start_msg);
+
+        if (req_id <= 0) {
+            static int s_download_req_counter = 5000;
+            req_id = ++s_download_req_counter;
+        }
+
+        char cmd_buf[MAX_PATH * 8 + 256];
+        snprintf(cmd_buf, sizeof(cmd_buf),
+                 "{\"cmd\":\"sftp_download\",\"reqId\":%d,\"remotePath\":\"%s\",\"localPath\":\"%s\",\"isDirectory\":%s}\n",
+                 req_id, esc_remote, esc_local, is_dir ? "true" : "false");
+
+        if (ed->worker_running && ed->h_stdin_write) {
+            DWORD written = 0;
+            WriteFile(ed->h_stdin_write, cmd_buf, (DWORD)strlen(cmd_buf), &written, NULL);
+            dbg_log("on_editor_web_message: sent sftp_download to worker: reqId=%d, remote=%s, local=%s",
+                    req_id, remote_path, local_target_utf8);
+        } else {
+            dbg_log("on_editor_web_message: cannot send sftp_download, worker not running");
+            char err_msg[512];
+            snprintf(err_msg, sizeof(err_msg),
+                     "{\"cmd\":\"sftp_download_resp\",\"reqId\":%d,\"success\":false,\"error\":\"SFTP 工作进程未就绪\"}",
+                     req_id);
+            webview_host_send_to_window(hwnd, err_msg);
         }
         return;
     }

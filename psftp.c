@@ -2465,6 +2465,18 @@ static int json_get_int(const char *json, const char *key)
     return atoi(p);
 }
 
+static bool json_get_bool(const char *json, const char *key)
+{
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return false;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == ':') p++;
+    if (!strncmp(p, "true", 4)) return true;
+    return false;
+}
+
 static void rpc_list_dir(int req_id, const char *path)
 {
     char *cpath = canonify(path);
@@ -2769,6 +2781,39 @@ static void rpc_realpath(int req_id, const char *path)
     sfree(canon);
 }
 
+static void rpc_download(int req_id, const char *remote_path, const char *local_path, bool is_dir)
+{
+    char *cremote = canonify(remote_path);
+#ifdef _WIN32
+    wchar_t *wpath = dup_mb_to_wc(CP_UTF8, local_path);
+    char *clocal = dup_wc_to_mb(DEFAULT_CODEPAGE, wpath, "_");
+    sfree(wpath);
+#else
+    char *clocal = dupstr(local_path);
+#endif
+
+    bool ok = sftp_get_file(cremote, clocal, is_dir, false);
+    const char *err = ok ? "" : fxp_error();
+
+    strbuf *sb = strbuf_new();
+    put_fmt(sb, "{\"cmd\":\"sftp_download_resp\",\"reqId\":%d,\"success\":%s,\"isDirectory\":%s,\"remotePath\":",
+            req_id, ok ? "true" : "false", is_dir ? "true" : "false");
+    escape_json_string(sb, remote_path);
+    put_str(sb, ",\"localPath\":");
+    escape_json_string(sb, local_path);
+    if (!ok) {
+        put_str(sb, ",\"error\":");
+        escape_json_string(sb, (err && *err) ? err : "下载失败 (SFTP 传输错误)");
+    }
+    put_str(sb, "}\n");
+    fputs(sb->s, stdout);
+    fflush(stdout);
+    strbuf_free(sb);
+
+    sfree(cremote);
+    sfree(clocal);
+}
+
 static int do_sftp_rpc(void)
 {
     char buf[65536];
@@ -2817,6 +2862,19 @@ static int do_sftp_rpc(void)
             char *path = json_get_str(buf, "path");
             rpc_realpath(req_id, path);
             sfree(path);
+        } else if (!strcmp(cmd, "sftp_download") || !strcmp(cmd, "download")) {
+            char *remote_path = json_get_str(buf, "remotePath");
+            if (!remote_path) remote_path = json_get_str(buf, "path");
+            char *local_path = json_get_str(buf, "localPath");
+            bool is_dir = json_get_bool(buf, "isDirectory");
+            if (remote_path && local_path) {
+                rpc_download(req_id, remote_path, local_path, is_dir);
+            } else {
+                printf("{\"cmd\":\"sftp_download_resp\",\"reqId\":%d,\"success\":false,\"error\":\"缺少远程或本地路径\"}\n", req_id);
+                fflush(stdout);
+            }
+            sfree(remote_path);
+            sfree(local_path);
         } else if (!strcmp(cmd, "quit") || !strcmp(cmd, "exit")) {
             sfree(cmd);
             break;

@@ -427,8 +427,8 @@
       filter: drop-shadow(0 0 3px rgba(229, 192, 123, 0.9));
     }
 
-    /* Tab Context Menu */
-    #tab-context-menu {
+    /* Context Menus */
+    #tab-context-menu, #tree-context-menu {
       position: fixed;
       z-index: 2000;
       background: #1e1e22;
@@ -438,9 +438,9 @@
       box-shadow: 0 6px 20px rgba(0,0,0,0.6);
       font-size: 12px;
       color: #ddd;
-      min-width: 140px;
+      min-width: 150px;
     }
-    #tab-context-menu.hidden {
+    #tab-context-menu.hidden, #tree-context-menu.hidden {
       display: none !important;
     }
     .ctx-item {
@@ -1205,12 +1205,23 @@
 
   <!-- Tab Right-Click Context Menu -->
   <div id="tab-context-menu" class="hidden">
+    <div class="ctx-item" id="ctx-tab-download">📥 下载此文件到本地...</div>
+    <div class="ctx-item" id="ctx-tab-copy-path">📋 复制文件路径</div>
+    <div class="ctx-divider"></div>
     <div class="ctx-item" id="ctx-tab-pin">📌 固定标签页</div>
     <div class="ctx-divider"></div>
     <div class="ctx-item" id="ctx-tab-close">✕ 关闭</div>
     <div class="ctx-item" id="ctx-tab-close-others">✕ 关闭其他标签页</div>
+  </div>
+
+  <!-- Tree Right-Click Context Menu -->
+  <div id="tree-context-menu" class="hidden">
+    <div class="ctx-item" id="ctx-tree-open">✏️ 在编辑器中打开</div>
+    <div class="ctx-item" id="ctx-tree-refresh">🔄 刷新目录</div>
     <div class="ctx-divider"></div>
-    <div class="ctx-item" id="ctx-tab-copy-path">📋 复制文件路径</div>
+    <div class="ctx-item" id="ctx-tree-download">📥 下载到本地...</div>
+    <div class="ctx-divider"></div>
+    <div class="ctx-item" id="ctx-tree-copy-path">📋 复制远程路径</div>
   </div>
 
   <!-- Offline Markdown, KaTeX & Mermaid Engines -->
@@ -1713,6 +1724,21 @@
                 }
                 break;
 
+              case 'sftp_download_started':
+                this.showToast(`📥 开始下载: ${msg.remotePath}`);
+                this.log('info', 'DOWNLOAD', `开始下载: ${msg.remotePath} => ${msg.localPath}`);
+                break;
+
+              case 'sftp_download_resp':
+                if (msg.success) {
+                  this.showToast(`✅ 下载成功已保存至: ${msg.localPath}`);
+                  this.log('info', 'DOWNLOAD', `下载成功: ${msg.remotePath} => ${msg.localPath}`);
+                } else {
+                  this.showToast(`❌ 下载失败: ${msg.error || '未知错误'}`);
+                  this.log('error', 'DOWNLOAD', `下载失败: ${msg.remotePath} 错误: ${msg.error}`);
+                }
+                break;
+
               case 'pong':
                 console.log('Pong from host');
                 break;
@@ -1835,6 +1861,13 @@
               this.toggleFolder(fullPath, node, chevron, childContainer, level);
             });
 
+            node.addEventListener('contextmenu', e => {
+              e.preventDefault();
+              e.stopPropagation();
+              const chevron = node.querySelector('.tree-chevron');
+              this.showTreeContextMenu(e.clientX, e.clientY, fullPath, true, item.name, node, chevron, childContainer, level);
+            });
+
             parentContainer.appendChild(node);
             parentContainer.appendChild(childContainer);
           } else {
@@ -1857,6 +1890,12 @@
             node.addEventListener('dblclick', e => {
               e.stopPropagation();
               this.openFile(fullPath, 0, true);
+            });
+
+            node.addEventListener('contextmenu', e => {
+              e.preventDefault();
+              e.stopPropagation();
+              this.showTreeContextMenu(e.clientX, e.clientY, fullPath, false, item.name, node);
             });
 
             parentContainer.appendChild(node);
@@ -2085,6 +2124,7 @@
         showTabContextMenu(x, y, path) {
           const menu = document.getElementById('tab-context-menu');
           if (!menu) return;
+          this.hideTreeContextMenu();
           this.contextMenuPath = path;
 
           const tabData = this.tabs.get(path);
@@ -2093,8 +2133,8 @@
             pinItem.textContent = tabData.isPinned ? '📌 取消固定标签页' : '📌 固定标签页';
           }
 
-          menu.style.left = `${Math.min(x, window.innerWidth - 170)}px`;
-          menu.style.top = `${Math.min(y, window.innerHeight - 170)}px`;
+          menu.style.left = `${Math.min(x, window.innerWidth - 180)}px`;
+          menu.style.top = `${Math.min(y, window.innerHeight - 200)}px`;
           menu.classList.remove('hidden');
         },
 
@@ -2102,6 +2142,62 @@
           const menu = document.getElementById('tab-context-menu');
           if (menu) menu.classList.add('hidden');
           this.contextMenuPath = null;
+        },
+
+        showTreeContextMenu(x, y, path, isDir, name, node, chevron, childContainer, level) {
+          const menu = document.getElementById('tree-context-menu');
+          if (!menu) return;
+          this.hideTabContextMenu();
+          this.treeMenuData = { path, isDir, name, node, chevron, childContainer, level };
+
+          const openItem = document.getElementById('ctx-tree-open');
+          const refreshItem = document.getElementById('ctx-tree-refresh');
+          const downloadItem = document.getElementById('ctx-tree-download');
+
+          if (isDir) {
+            if (openItem) openItem.style.display = 'none';
+            if (refreshItem) refreshItem.style.display = 'flex';
+            if (downloadItem) downloadItem.textContent = '📥 下载文件夹到本地...';
+          } else {
+            if (openItem) openItem.style.display = 'flex';
+            if (refreshItem) refreshItem.style.display = 'none';
+            if (downloadItem) downloadItem.textContent = '📥 下载文件到本地...';
+          }
+
+          menu.style.left = `${Math.min(x, window.innerWidth - 180)}px`;
+          menu.style.top = `${Math.min(y, window.innerHeight - 180)}px`;
+          menu.classList.remove('hidden');
+        },
+
+        hideTreeContextMenu() {
+          const menu = document.getElementById('tree-context-menu');
+          if (menu) menu.classList.add('hidden');
+          this.treeMenuData = null;
+        },
+
+        refreshFolder(folderPath, folderNode, chevron, childContainer, level) {
+          if (childContainer && chevron && folderNode) {
+            childContainer.dataset.loaded = 'false';
+            childContainer.style.display = 'none';
+            this.toggleFolder(folderPath, folderNode, chevron, childContainer, level);
+          } else {
+            this.loadDirectory(this.currentDir);
+          }
+        },
+
+        downloadPath(remotePath, isDirectory, defaultName) {
+          if (!remotePath) return;
+          if (!defaultName) {
+            const clean = remotePath.replace(/[\/\\]+$/, '');
+            const idx = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+            defaultName = idx >= 0 ? clean.substring(idx + 1) : (clean || (isDirectory ? 'folder' : 'file'));
+          }
+          this.send({
+            cmd: 'sftp_download_prompt',
+            remotePath: remotePath,
+            isDirectory: !!isDirectory,
+            defaultName: defaultName
+          });
         },
 
         closeOtherTabs(keepPath) {
@@ -2702,7 +2798,44 @@
         }
       });
 
+      // Tree Context Menu Actions
+      document.getElementById('ctx-tree-open')?.addEventListener('click', () => {
+        if (bridge.treeMenuData && !bridge.treeMenuData.isDir) {
+          bridge.openFile(bridge.treeMenuData.path);
+        }
+        bridge.hideTreeContextMenu();
+      });
+      document.getElementById('ctx-tree-refresh')?.addEventListener('click', () => {
+        if (bridge.treeMenuData) {
+          const { path, node, chevron, childContainer, level } = bridge.treeMenuData;
+          bridge.refreshFolder(path, node, chevron, childContainer, level);
+        }
+        bridge.hideTreeContextMenu();
+      });
+      document.getElementById('ctx-tree-download')?.addEventListener('click', () => {
+        if (bridge.treeMenuData) {
+          const { path, isDir, name } = bridge.treeMenuData;
+          bridge.downloadPath(path, isDir, name);
+        }
+        bridge.hideTreeContextMenu();
+      });
+      document.getElementById('ctx-tree-copy-path')?.addEventListener('click', () => {
+        if (bridge.treeMenuData) {
+          navigator.clipboard.writeText(bridge.treeMenuData.path);
+          bridge.showToast('已复制远程路径: ' + bridge.treeMenuData.path);
+        }
+        bridge.hideTreeContextMenu();
+      });
+
       // Tab Context Menu Actions
+      document.getElementById('ctx-tab-download')?.addEventListener('click', () => {
+        if (bridge.contextMenuPath) {
+          const tabData = bridge.tabs.get(bridge.contextMenuPath);
+          const name = tabData ? tabData.name : null;
+          bridge.downloadPath(bridge.contextMenuPath, false, name);
+        }
+        bridge.hideTabContextMenu();
+      });
       document.getElementById('ctx-tab-pin')?.addEventListener('click', () => {
         if (bridge.contextMenuPath) bridge.togglePinTab(bridge.contextMenuPath);
         bridge.hideTabContextMenu();
@@ -2723,9 +2856,13 @@
         bridge.hideTabContextMenu();
       });
 
-      window.addEventListener('click', () => bridge.hideTabContextMenu());
+      window.addEventListener('click', () => {
+        bridge.hideTabContextMenu();
+        bridge.hideTreeContextMenu();
+      });
       window.addEventListener('contextmenu', e => {
         if (!e.target.closest('.tab-item')) bridge.hideTabContextMenu();
+        if (!e.target.closest('.tree-node')) bridge.hideTreeContextMenu();
       });
 
       window.EditorBridge = bridge;
