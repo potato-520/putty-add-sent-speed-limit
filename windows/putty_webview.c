@@ -26,6 +26,8 @@
 #include <fcntl.h>
 #include <io.h>
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "uuid.lib")
+#pragma comment(lib, "ole32.lib")
 #include "webview/webview_host.h"
 
 /* appname is generated in be_list.c by be_list() macro */
@@ -3049,15 +3051,9 @@ static bool pick_folder_modern(HWND hwnd, const wchar_t *title, wchar_t *out_dir
 
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    static const CLSID clsid_FileOpenDialog =
-        {0xDC1C5A9C, 0xE88A, 0x4dde, {0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}};
-    static const IID iid_IFileOpenDialog =
-        {0xD57C52D8, 0x8888, 0x47d4, {0xBF, 0x44, 0x24, 0x01, 0xED, 0x5F, 0x82, 0xED}};
-    static const IID iid_IShellItem =
-        {0x43826D1E, 0xE718, 0x42EE, {0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE}};
-
-    HRESULT hr = CoCreateInstance(&clsid_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
-                                  &iid_IFileOpenDialog, (void**)&pfd);
+    HRESULT hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                  &IID_IFileOpenDialog, (void**)&pfd);
+    dbg_log("pick_folder_modern: CoCreateInstance hr=0x%08lx, pfd=%p", hr, (void*)pfd);
     if (SUCCEEDED(hr) && pfd) {
         FILEOPENDIALOGOPTIONS dwOptions = 0;
         pfd->lpVtbl->GetOptions(pfd, &dwOptions);
@@ -3067,6 +3063,7 @@ static bool pick_folder_modern(HWND hwnd, const wchar_t *title, wchar_t *out_dir
         }
         pfd->lpVtbl->SetOkButtonLabel(pfd, L"选择文件夹");
         hr = pfd->lpVtbl->Show(pfd, hwnd);
+        dbg_log("pick_folder_modern: IFileOpenDialog Show hr=0x%08lx", hr);
         if (SUCCEEDED(hr)) {
             IShellItem *psi = NULL;
             hr = pfd->lpVtbl->GetResult(pfd, &psi);
