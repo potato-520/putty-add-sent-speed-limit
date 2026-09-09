@@ -1933,6 +1933,7 @@
               });
             }
 
+            const isMdFile = /\.(md|markdown|mdown|mkd)$/i.test(path);
             const tabData = {
               path,
               name,
@@ -1943,7 +1944,8 @@
               isPinned: !!forcePin, // Pinned if forced or edited
               isBinary: !!resp.isBinary,
               size: resp.size || 0,
-              viewState: null
+              viewState: null,
+              isPreviewingMd: isMdFile  // Default to preview for .md files
             };
 
             // If reusing unpinned preview tab, close old one first
@@ -2191,7 +2193,12 @@
           const btnMdPreview = document.getElementById('btn-md-preview');
           if (btnMdPreview) {
             btnMdPreview.style.display = isMd ? 'inline-flex' : 'none';
-            btnMdPreview.textContent = tabData.isPreviewingMd ? '✏️ 编辑' : '👁️ 预览';
+            // When previewing: button becomes "Edit source" (amber/active);
+            // When editing: button becomes "Preview" (green)
+            btnMdPreview.textContent = tabData.isPreviewingMd ? '✏️ 编辑源码' : '👁️ 预览';
+            btnMdPreview.title = tabData.isPreviewingMd
+              ? '返回 Markdown 源码编辑 (Ctrl+Shift+V)'
+              : '切换 Markdown 富文本预览 (Ctrl+Shift+V)';
             btnMdPreview.classList.toggle('active', !!tabData.isPreviewingMd);
           }
 
