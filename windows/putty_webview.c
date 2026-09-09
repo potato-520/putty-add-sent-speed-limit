@@ -19,6 +19,7 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <aclapi.h>
 #include <sddl.h>
 #include <wincrypt.h>
@@ -3041,6 +3042,61 @@ static void editor_window_close_for_session(int session_id)
     }
 }
 
+static bool pick_folder_modern(HWND hwnd, const wchar_t *title, wchar_t *out_dir, size_t out_max)
+{
+    bool success = false;
+    IFileOpenDialog *pfd = NULL;
+
+    static const CLSID clsid_FileOpenDialog =
+        {0xDC1C5A9C, 0xE88A, 0x4dde, {0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}};
+    static const IID iid_IFileOpenDialog =
+        {0xD57C52D8, 0x8888, 0x47d4, {0xBF, 0x44, 0x24, 0x01, 0xED, 0x5F, 0x82, 0xED}};
+    static const IID iid_IShellItem =
+        {0x43826D1E, 0xE718, 0x42EE, {0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE}};
+
+    HRESULT hr = CoCreateInstance(&clsid_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                  &iid_IFileOpenDialog, (void**)&pfd);
+    if (SUCCEEDED(hr) && pfd) {
+        FILEOPENDIALOGOPTIONS dwOptions = 0;
+        pfd->lpVtbl->GetOptions(pfd, &dwOptions);
+        pfd->lpVtbl->SetOptions(pfd, dwOptions | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        if (title && *title) {
+            pfd->lpVtbl->SetTitle(pfd, title);
+        }
+        pfd->lpVtbl->SetOkButtonLabel(pfd, L"选择文件夹");
+        hr = pfd->lpVtbl->Show(pfd, hwnd);
+        if (SUCCEEDED(hr)) {
+            IShellItem *psi = NULL;
+            hr = pfd->lpVtbl->GetResult(pfd, &psi);
+            if (SUCCEEDED(hr) && psi) {
+                LPWSTR pszPath = NULL;
+                hr = psi->lpVtbl->GetDisplayName(psi, SIGDN_FILESYSPATH, &pszPath);
+                if (SUCCEEDED(hr) && pszPath) {
+                    wcsncpy(out_dir, pszPath, out_max - 1);
+                    out_dir[out_max - 1] = L'\0';
+                    success = true;
+                    CoTaskMemFree(pszPath);
+                }
+                psi->lpVtbl->Release(psi);
+            }
+        }
+        pfd->lpVtbl->Release(pfd);
+    } else {
+        BROWSEINFOW bi = {0};
+        bi.hwndOwner = hwnd;
+        bi.lpszTitle = title ? title : L"选择保存目标文件夹";
+        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+        PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+        if (pidl) {
+            if (SHGetPathFromIDListW(pidl, out_dir)) {
+                success = true;
+            }
+            CoTaskMemFree(pidl);
+        }
+    }
+    return success;
+}
+
 static void on_editor_web_message(HWND hwnd, const char *message, void *userdata)
 {
     if (!message || !*message) return;
@@ -3098,54 +3154,32 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
         }
 
         wchar_t local_target_w[MAX_PATH] = {0};
+        wchar_t selected_dir[MAX_PATH] = {0};
+        const wchar_t *dlg_title = is_dir ? L"选择下载文件夹保存的目标位置" : L"选择下载文件保存的目标文件夹";
 
-        if (is_dir) {
-            BROWSEINFOW bi = {0};
-            bi.hwndOwner = hwnd;
-            bi.lpszTitle = L"选择保存目标文件夹的位置";
-            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
-            PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
-            if (!pidl) {
-                dbg_log("sftp_download_prompt: folder browse cancelled by user");
-                return;
-            }
-            wchar_t selected_dir[MAX_PATH] = {0};
-            BOOL ok = SHGetPathFromIDListW(pidl, selected_dir);
-            CoTaskMemFree(pidl);
-            if (!ok || !selected_dir[0]) {
-                dbg_log("sftp_download_prompt: SHGetPathFromIDListW failed");
-                return;
-            }
+        if (!pick_folder_modern(hwnd, dlg_title, selected_dir, MAX_PATH)) {
+            dbg_log("sftp_download_prompt: folder browse cancelled by user");
+            return;
+        }
 
-            wchar_t w_defname[MAX_PATH] = {0};
-            MultiByteToWideChar(CP_UTF8, 0, default_name, -1, w_defname, MAX_PATH);
+        wchar_t w_defname[MAX_PATH] = {0};
+        MultiByteToWideChar(CP_UTF8, 0, default_name, -1, w_defname, MAX_PATH);
 
-            size_t slen = wcslen(selected_dir);
-            if (slen > 0 && (selected_dir[slen - 1] == L'\\' || selected_dir[slen - 1] == L'/')) {
-                _snwprintf(local_target_w, MAX_PATH, L"%s%s", selected_dir, w_defname);
-            } else {
-                _snwprintf(local_target_w, MAX_PATH, L"%s\\%s", selected_dir, w_defname);
-            }
+        size_t slen = wcslen(selected_dir);
+        if (slen > 0 && (selected_dir[slen - 1] == L'\\' || selected_dir[slen - 1] == L'/')) {
+            _snwprintf(local_target_w, MAX_PATH, L"%s%s", selected_dir, w_defname);
         } else {
-            wchar_t file_buf[MAX_PATH] = {0};
-            if (default_name[0]) {
-                MultiByteToWideChar(CP_UTF8, 0, default_name, -1, file_buf, MAX_PATH);
-            }
-            OPENFILENAMEW ofn;
-            ZeroMemory(&ofn, sizeof(ofn));
-            ofn.lStructSize = sizeof(ofn);
-            ofn.hwndOwner = hwnd;
-            ofn.lpstrFile = file_buf;
-            ofn.nMaxFile = MAX_PATH;
-            ofn.lpstrFilter = L"所有文件 (*.*)\0*.*\0";
-            ofn.nFilterIndex = 1;
-            ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            _snwprintf(local_target_w, MAX_PATH, L"%s\\%s", selected_dir, w_defname);
+        }
 
-            if (!GetSaveFileNameW(&ofn)) {
-                dbg_log("sftp_download_prompt: file save dialog cancelled by user");
+        if (!is_dir && GetFileAttributesW(local_target_w) != INVALID_FILE_ATTRIBUTES) {
+            wchar_t prompt[MAX_PATH + 128];
+            _snwprintf(prompt, sizeof(prompt)/sizeof(prompt[0]),
+                       L"目标文件已存在：\n%s\n\n是否覆盖此文件？", local_target_w);
+            if (MessageBoxW(hwnd, prompt, L"确认覆盖", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+                dbg_log("sftp_download_prompt: user cancelled overwrite");
                 return;
             }
-            wcsncpy(local_target_w, file_buf, MAX_PATH - 1);
         }
 
         char local_target_utf8[MAX_PATH * 3] = {0};
