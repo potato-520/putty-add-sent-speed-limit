@@ -1619,6 +1619,9 @@ static void session_handle_prompt_input(WebViewSession *sess, const char *data, 
             if (pr->echo) {
                 strncpy(sess->temp_prompt_user, val, sizeof(sess->temp_prompt_user) - 1);
                 sess->temp_prompt_user[sizeof(sess->temp_prompt_user) - 1] = '\0';
+                if (val[0] != '\0' && sess->cfg) {
+                    conf_set_str(sess->cfg, CONF_username, sess->temp_prompt_user);
+                }
             } else {
                 strncpy(sess->temp_prompt_pass, val, sizeof(sess->temp_prompt_pass) - 1);
                 sess->temp_prompt_pass[sizeof(sess->temp_prompt_pass) - 1] = '\0';
@@ -2286,6 +2289,14 @@ typedef struct WebViewEditorWindow {
     bool is_ready;
     char pending_file[MAX_PATH * 2];
     int pending_line;
+
+    /* SFTP worker process handles */
+    HANDLE h_proc;
+    HANDLE h_stdin_write;
+    HANDLE h_stdout_read;
+    HANDLE h_reader_thread;
+    bool worker_running;
+
     struct WebViewEditorWindow *next;
 } WebViewEditorWindow;
 
@@ -2309,6 +2320,210 @@ static WebViewEditorWindow *editor_window_find_by_hwnd(HWND hwnd)
     return NULL;
 }
 
+static DWORD WINAPI sftp_reader_thread_proc(LPVOID param)
+{
+    WebViewEditorWindow *ed = (WebViewEditorWindow *)param;
+    if (!ed || !ed->h_stdout_read) return 0;
+
+    char buf[65536];
+    char line_buf[65536];
+    size_t line_len = 0;
+    DWORD bytes_read = 0;
+
+    while (ReadFile(ed->h_stdout_read, buf, sizeof(buf) - 1, &bytes_read, NULL) && bytes_read > 0) {
+        for (DWORD i = 0; i < bytes_read; i++) {
+            char ch = buf[i];
+            if (ch == '\r') continue;
+            if (ch == '\n') {
+                line_buf[line_len] = '\0';
+                if (line_len > 0 && ed->hwnd && IsWindow(ed->hwnd)) {
+                    webview_host_send_to_window(ed->hwnd, line_buf);
+                }
+                line_len = 0;
+            } else {
+                if (line_len < sizeof(line_buf) - 1) {
+                    line_buf[line_len++] = ch;
+                }
+            }
+        }
+    }
+
+    if (line_len > 0 && ed->hwnd && IsWindow(ed->hwnd)) {
+        line_buf[line_len] = '\0';
+        webview_host_send_to_window(ed->hwnd, line_buf);
+    }
+
+    dbg_log("sftp_reader_thread_proc: exited for hwnd=%p", (void*)ed->hwnd);
+    return 0;
+}
+
+static void sftp_worker_stop(WebViewEditorWindow *ed)
+{
+    if (!ed || !ed->worker_running) return;
+    dbg_log("sftp_worker_stop: stopping worker for hwnd=%p", (void*)ed->hwnd);
+
+    if (ed->h_stdin_write) {
+        DWORD written = 0;
+        WriteFile(ed->h_stdin_write, "{\"cmd\":\"quit\"}\n", 15, &written, NULL);
+        FlushFileBuffers(ed->h_stdin_write);
+        CloseHandle(ed->h_stdin_write);
+        ed->h_stdin_write = NULL;
+    }
+
+    if (ed->h_proc) {
+        if (WaitForSingleObject(ed->h_proc, 500) == WAIT_TIMEOUT) {
+            dbg_log("sftp_worker_stop: terminating worker process");
+            TerminateProcess(ed->h_proc, 0);
+        }
+        CloseHandle(ed->h_proc);
+        ed->h_proc = NULL;
+    }
+
+    if (ed->h_reader_thread) {
+        WaitForSingleObject(ed->h_reader_thread, 1000);
+        CloseHandle(ed->h_reader_thread);
+        ed->h_reader_thread = NULL;
+    }
+
+    if (ed->h_stdout_read) {
+        CloseHandle(ed->h_stdout_read);
+        ed->h_stdout_read = NULL;
+    }
+
+    ed->worker_running = false;
+    dbg_log("sftp_worker_stop: worker stopped cleanly");
+}
+
+static bool sftp_worker_start(WebViewEditorWindow *ed)
+{
+    if (!ed || ed->worker_running) return true;
+
+    WebViewSession *sess = session_find(ed->session_id);
+    if (!sess) {
+        dbg_log("sftp_worker_start: session %d not found", ed->session_id);
+        return false;
+    }
+
+    int proto = conf_get_int(sess->cfg, CONF_protocol);
+    if (proto != PROT_SSH) {
+        dbg_log("sftp_worker_start: session %d is not SSH (proto=%d)", ed->session_id, proto);
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg),
+                 "{\"cmd\":\"sftp_error\",\"error\":\"SFTP 仅支持 SSH 会话 (当前协议: %d)\"}", proto);
+        webview_host_send_to_window(ed->hwnd, err_msg);
+        return false;
+    }
+
+    char exe_dir[MAX_PATH];
+    GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
+    char *slash = strrchr(exe_dir, '\\');
+    if (slash) *(slash + 1) = '\0';
+    else exe_dir[0] = '\0';
+
+    char psftp_path[MAX_PATH];
+    snprintf(psftp_path, sizeof(psftp_path), "%spsftp.exe", exe_dir);
+
+    if (GetFileAttributesA(psftp_path) == INVALID_FILE_ATTRIBUTES) {
+        dbg_log("sftp_worker_start: psftp.exe not found at '%s'", psftp_path);
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg),
+                 "{\"cmd\":\"sftp_error\",\"error\":\"未找到 psftp.exe: %s\"}", psftp_path);
+        webview_host_send_to_window(ed->hwnd, err_msg);
+        return false;
+    }
+
+    const char *host = conf_get_str(sess->cfg, CONF_host);
+    int port = conf_get_int(sess->cfg, CONF_port);
+    const char *user = (sess->temp_prompt_user[0] != '\0') ? sess->temp_prompt_user : conf_get_str_ambi(sess->cfg, CONF_username, NULL);
+    const char *pass = sess->temp_prompt_pass;
+    Filename *keyfn = conf_get_filename(sess->cfg, CONF_keyfile);
+    const char *keyfile = keyfn ? filename_to_str(keyfn) : "";
+
+    char cmdline[2048];
+    int len = snprintf(cmdline, sizeof(cmdline), "\"%s\" -rpc -batch", psftp_path);
+
+    if (port > 0 && port != 22) {
+        len += snprintf(cmdline + len, sizeof(cmdline) - len, " -P %d", port);
+    }
+    if (keyfile && *keyfile) {
+        len += snprintf(cmdline + len, sizeof(cmdline) - len, " -i \"%s\"", keyfile);
+    }
+    if (pass && *pass) {
+        len += snprintf(cmdline + len, sizeof(cmdline) - len, " -pw \"%s\"", pass);
+    }
+    if (user && *user) {
+        len += snprintf(cmdline + len, sizeof(cmdline) - len, " %s@%s", user, (host && *host) ? host : "localhost");
+    } else {
+        len += snprintf(cmdline + len, sizeof(cmdline) - len, " %s", (host && *host) ? host : "localhost");
+    }
+
+    dbg_log("sftp_worker_start: spawning psftp for session %d (port=%d, host=%s, user=%s)",
+            ed->session_id, port, host, user ? user : "");
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+
+    HANDLE h_stdin_read = NULL;
+    HANDLE h_stdout_write = NULL;
+
+    if (!CreatePipe(&h_stdin_read, &ed->h_stdin_write, &sa, 0)) {
+        dbg_log("sftp_worker_start: CreatePipe stdin failed %lu", GetLastError());
+        return false;
+    }
+    SetHandleInformation(ed->h_stdin_write, HANDLE_FLAG_INHERIT, 0);
+
+    if (!CreatePipe(&ed->h_stdout_read, &h_stdout_write, &sa, 0)) {
+        dbg_log("sftp_worker_start: CreatePipe stdout failed %lu", GetLastError());
+        CloseHandle(h_stdin_read);
+        CloseHandle(ed->h_stdin_write);
+        ed->h_stdin_write = NULL;
+        return false;
+    }
+    SetHandleInformation(ed->h_stdout_read, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE h_nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = h_stdin_read;
+    si.hStdOutput = h_stdout_write;
+    si.hStdError = (h_nul != INVALID_HANDLE_VALUE) ? h_nul : h_stdout_write;
+
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+
+    BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+
+    CloseHandle(h_stdin_read);
+    CloseHandle(h_stdout_write);
+    if (h_nul != INVALID_HANDLE_VALUE) CloseHandle(h_nul);
+
+    if (!ok) {
+        dbg_log("sftp_worker_start: CreateProcessA failed %lu", GetLastError());
+        CloseHandle(ed->h_stdin_write);
+        CloseHandle(ed->h_stdout_read);
+        ed->h_stdin_write = NULL;
+        ed->h_stdout_read = NULL;
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg),
+                 "{\"cmd\":\"sftp_error\",\"error\":\"启动 psftp.exe 失败 (Error %lu)\"}", GetLastError());
+        webview_host_send_to_window(ed->hwnd, err_msg);
+        return false;
+    }
+
+    ed->h_proc = pi.hProcess;
+    CloseHandle(pi.hThread);
+    ed->worker_running = true;
+
+    ed->h_reader_thread = CreateThread(NULL, 0, sftp_reader_thread_proc, ed, 0, NULL);
+    dbg_log("sftp_worker_start: psftp worker spawned pid=%lu, reader thread=%p", pi.dwProcessId, (void*)ed->h_reader_thread);
+    return true;
+}
+
 static void editor_window_destroy(HWND hwnd)
 {
     dbg_log("editor_window_destroy: closing editor window %p", (void*)hwnd);
@@ -2317,6 +2532,7 @@ static void editor_window_destroy(HWND hwnd)
         if ((*pp)->hwnd == hwnd) {
             WebViewEditorWindow *to_free = *pp;
             *pp = (*pp)->next;
+            sftp_worker_stop(to_free);
             webview_host_close(hwnd);
             sfree(to_free);
             dbg_log("editor_window_destroy: editor window %p destroyed and unlinked", (void*)hwnd);
@@ -2351,6 +2567,8 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
                  ed->session_id, ed->session_name, ed->remote_host);
         webview_host_send_to_window(hwnd, resp);
 
+        sftp_worker_start(ed);
+
         if (ed->pending_file[0]) {
             char open_cmd[MAX_PATH * 2 + 64];
             snprintf(open_cmd, sizeof(open_cmd),
@@ -2359,6 +2577,15 @@ static void on_editor_web_message(HWND hwnd, const char *message, void *userdata
             webview_host_send_to_window(hwnd, open_cmd);
             ed->pending_file[0] = '\0';
             ed->pending_line = 0;
+        }
+        return;
+    }
+
+    if (strncmp(message, "{\"cmd\":\"sftp_", 13) == 0) {
+        if (ed->worker_running && ed->h_stdin_write) {
+            DWORD written = 0;
+            WriteFile(ed->h_stdin_write, message, (DWORD)strlen(message), &written, NULL);
+            WriteFile(ed->h_stdin_write, "\n", 1, &written, NULL);
         }
         return;
     }
@@ -2654,6 +2881,11 @@ static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const
     memset(sess, 0, sizeof(*sess));
     sess->id = next_session_id++;
     sess->cfg = conf_copy(conf_to_use);
+    if (proto == PROT_SSH) {
+        conf_set_bool(sess->cfg, CONF_ssh_connection_sharing, true);
+        conf_set_bool(sess->cfg, CONF_ssh_connection_sharing_upstream, true);
+        conf_set_bool(sess->cfg, CONF_ssh_connection_sharing_downstream, false);
+    }
     sess->hwnd = target_hwnd;
 
     memset(&sess->wgs, 0, sizeof(sess->wgs));
@@ -3218,6 +3450,9 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
 
                     strncpy(sess->temp_prompt_user, user, sizeof(sess->temp_prompt_user) - 1);
                     sess->temp_prompt_user[sizeof(sess->temp_prompt_user) - 1] = '\0';
+                    if (user[0] != '\0' && sess->cfg) {
+                        conf_set_str(sess->cfg, CONF_username, sess->temp_prompt_user);
+                    }
                     strncpy(sess->temp_prompt_pass, pass, sizeof(sess->temp_prompt_pass) - 1);
                     sess->temp_prompt_pass[sizeof(sess->temp_prompt_pass) - 1] = '\0';
                     sess->modal_remember = remember;

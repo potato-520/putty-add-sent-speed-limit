@@ -28,7 +28,6 @@
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      user-select: none;
     }
 
     body {
@@ -40,6 +39,7 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      user-select: none;
     }
 
     /* Top App Bar */
@@ -89,7 +89,7 @@
       background: transparent;
       border: 1px solid transparent;
       color: var(--text-main);
-      padding: 4px 8px;
+      padding: 4px 10px;
       border-radius: 4px;
       cursor: pointer;
       font-size: 12px;
@@ -109,6 +109,17 @@
       background: rgba(255, 255, 255, 0.15);
     }
 
+    .btn-action.btn-save {
+      background: rgba(0, 122, 204, 0.2);
+      border-color: rgba(0, 122, 204, 0.4);
+      color: #61afef;
+    }
+
+    .btn-action.btn-save:hover {
+      background: rgba(0, 122, 204, 0.4);
+      color: #fff;
+    }
+
     /* Main Container */
     #main-container {
       flex: 1;
@@ -119,8 +130,8 @@
 
     /* Left Sidebar: File Tree */
     #sidebar {
-      width: 240px;
-      min-width: 160px;
+      width: 250px;
+      min-width: 180px;
       max-width: 500px;
       background-color: var(--bg-sidebar);
       border-right: 1px solid var(--border-color);
@@ -163,22 +174,63 @@
       background: rgba(255, 255, 255, 0.1);
     }
 
+    .sidebar-path-bar {
+      padding: 4px 8px;
+      background: #1e1e1e;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .sidebar-path-input {
+      flex: 1;
+      background: transparent;
+      border: 1px solid transparent;
+      color: #9cdcfe;
+      font-family: Consolas, monospace;
+      font-size: 11.5px;
+      padding: 2px 4px;
+      border-radius: 3px;
+      outline: none;
+    }
+
+    .sidebar-path-input:focus {
+      background: #252526;
+      border-color: var(--accent);
+    }
+
     #file-tree-container {
       flex: 1;
       overflow-y: auto;
       overflow-x: hidden;
-      padding: 6px 0;
+      padding: 4px 0;
     }
 
     .tree-node {
-      padding: 4px 12px;
+      padding: 5px 12px;
       display: flex;
       align-items: center;
-      gap: 6px;
+      justify-content: space-between;
       cursor: pointer;
       color: var(--text-main);
       font-size: 12.5px;
       white-space: nowrap;
+    }
+
+    .tree-node-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tree-node-size {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: Consolas, monospace;
+      margin-left: 8px;
     }
 
     .tree-node:hover {
@@ -186,7 +238,7 @@
     }
 
     .tree-node.active {
-      background-color: rgba(0, 122, 204, 0.3);
+      background-color: rgba(0, 122, 204, 0.25);
       color: #fff;
     }
 
@@ -239,12 +291,12 @@
 
     .tab-item {
       height: 34px;
-      padding: 0 12px;
+      padding: 0 10px;
       background-color: var(--bg-tab);
       border-right: 1px solid var(--border-color);
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       cursor: pointer;
       color: var(--text-muted);
       font-size: 12.5px;
@@ -267,7 +319,7 @@
     .tab-item.pinned .tab-pin-icon {
       display: inline-block;
       font-size: 11px;
-      opacity: 0.7;
+      opacity: 0.8;
     }
 
     .tab-pin-icon {
@@ -275,8 +327,8 @@
     }
 
     .tab-dirty-indicator {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background-color: var(--dirty-dot);
       display: none;
@@ -293,8 +345,7 @@
       align-items: center;
       justify-content: center;
       border-radius: 3px;
-      font-size: 13px;
-      line-height: 1;
+      font-size: 12px;
       opacity: 0.6;
     }
 
@@ -337,21 +388,106 @@
 
     .empty-hint {
       font-size: 12.5px;
-      max-width: 360px;
+      max-width: 400px;
       line-height: 1.5;
     }
 
-    .monaco-placeholder {
+    /* Text Editor Area */
+    #editor-wrapper {
       display: none;
+      flex: 1;
+      flex-direction: row;
+      overflow: hidden;
+      background: #1e1e1e;
+    }
+
+    #line-numbers {
+      width: 48px;
+      background-color: #1e1e1e;
+      color: #858585;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13.5px;
+      line-height: 1.5;
+      text-align: right;
+      padding: 12px 8px 12px 0;
+      border-right: 1px solid #2d2d2d;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    #editor-textarea {
       flex: 1;
       background: #1e1e1e;
       color: #d4d4d4;
       font-family: Consolas, "Courier New", monospace;
       font-size: 13.5px;
-      padding: 16px;
-      overflow: auto;
+      line-height: 1.5;
+      padding: 12px 16px;
+      border: none;
+      outline: none;
+      resize: none;
       white-space: pre;
-      line-height: 1.45;
+      overflow: auto;
+      tab-size: 4;
+      user-select: text;
+    }
+
+    /* Image Preview Area */
+    #image-wrapper {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #141414;
+      background-image: linear-gradient(45deg, #1e1e1e 25%, transparent 25%),
+                        linear-gradient(-45deg, #1e1e1e 25%, transparent 25%),
+                        linear-gradient(45deg, transparent 75%, #1e1e1e 75%),
+                        linear-gradient(-45deg, transparent 75%, #1e1e1e 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    #image-wrapper img {
+      max-width: 90%;
+      max-height: 80%;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+      border-radius: 4px;
+    }
+
+    #image-info {
+      margin-top: 12px;
+      color: #aaa;
+      font-size: 12px;
+      font-family: Consolas, monospace;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+
+    /* Toast Notifications */
+    #toast {
+      position: fixed;
+      bottom: 32px;
+      right: 20px;
+      background: #333333;
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      font-size: 12.5px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+      transform: translateY(10px);
+      z-index: 9999;
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
     }
 
     /* Bottom Status Bar */
@@ -391,8 +527,8 @@
       <div id="session-badge" class="session-badge">Session --</div>
     </div>
     <div class="top-actions">
+      <button class="btn-action btn-save" id="btn-save" title="保存文件 (Ctrl+S)">💾 保存</button>
       <button class="btn-action" id="btn-refresh" title="刷新文件列表">🔄 刷新</button>
-      <button class="btn-action" id="btn-new" title="新建文件">📄 新建</button>
       <button class="btn-action" id="btn-close" title="关闭窗口">✕ 关闭</button>
     </div>
   </div>
@@ -402,15 +538,20 @@
     <!-- Left Sidebar: Remote File Tree -->
     <div id="sidebar">
       <div class="sidebar-header">
-        <span id="explorer-root">远程资源管理器 (/)</span>
+        <span>📁 远程文件</span>
         <div class="sidebar-actions">
-          <button class="sidebar-icon-btn" id="btn-tree-refresh" title="刷新">🔄</button>
+          <button class="sidebar-icon-btn" id="btn-tree-up" title="上一级目录">⬆️</button>
+          <button class="sidebar-icon-btn" id="btn-tree-new" title="新建文件">➕</button>
+          <button class="sidebar-icon-btn" id="btn-tree-refresh" title="刷新目录">🔄</button>
         </div>
+      </div>
+      <div class="sidebar-path-bar">
+        <input type="text" id="sidebar-path-input" class="sidebar-path-input" value="/" spellcheck="false" />
       </div>
       <div id="file-tree-container">
         <div class="tree-node active">
-          <span class="node-icon">📁</span>
-          <span>加载中... (Waiting for SFTP connection)</span>
+          <span class="node-icon">⏳</span>
+          <span>正在连接 SFTP 引擎...</span>
         </div>
       </div>
     </div>
@@ -435,8 +576,14 @@
           </div>
         </div>
 
-        <div id="monaco-placeholder" class="monaco-placeholder">
-          <!-- Text view scaffold for M2/M3, Monaco Editor mounts here in M4 -->
+        <div id="editor-wrapper">
+          <div id="line-numbers">1</div>
+          <textarea id="editor-textarea" spellcheck="false"></textarea>
+        </div>
+
+        <div id="image-wrapper">
+          <img id="image-element" src="" alt="Preview" />
+          <div id="image-info">-- x --</div>
         </div>
       </div>
     </div>
@@ -445,7 +592,7 @@
   <!-- Status Bar -->
   <div id="status-bar">
     <div class="status-left">
-      <div class="status-item" id="status-conn">● 已连接宿主 (Connected to Host)</div>
+      <div class="status-item" id="status-conn">● 初始化中...</div>
       <div class="status-item" id="status-path">/</div>
     </div>
     <div class="status-right">
@@ -455,15 +602,23 @@
     </div>
   </div>
 
+  <div id="toast">已保存</div>
+
   <script>
     (function () {
-      // 1. WebMessage IPC Infrastructure
+      // 1. WebMessage IPC Infrastructure with Request-Response Map
       const bridge = {
         sessionId: 0,
         sessionName: '',
         host: '',
-        openFiles: [],
-        activeFile: null,
+        currentDir: '/',
+        homedir: '/',
+        reqCounter: 1,
+        pendingReqs: new Map(),
+
+        // Open tabs map: path => { path, name, content, originalContent, isDirty, isPinned, isBinary, size }
+        tabs: new Map(),
+        activePath: null,
 
         send(obj) {
           if (window.chrome && window.chrome.webview) {
@@ -472,11 +627,24 @@
           }
         },
 
+        request(cmd, params = {}) {
+          return new Promise((resolve, reject) => {
+            const reqId = this.reqCounter++;
+            const timer = setTimeout(() => {
+              if (this.pendingReqs.has(reqId)) {
+                this.pendingReqs.delete(reqId);
+                reject(new Error(`Request timeout for cmd: ${cmd}`));
+              }
+            }, 15000);
+
+            this.pendingReqs.set(reqId, { resolve, reject, timer });
+            this.send({ cmd, reqId, ...params });
+          });
+        },
+
         init() {
-          // Send handshake to C host
           this.send({ cmd: 'editor_init' });
 
-          // Listen for messages from C host
           if (window.chrome && window.chrome.webview) {
             window.chrome.webview.addEventListener('message', e => {
               this.onMessage(e.data);
@@ -487,26 +655,51 @@
         onMessage(data) {
           try {
             const msg = (typeof data === 'string') ? JSON.parse(data) : data;
-            console.log('[Editor IPC Recv]', msg);
+            console.log('[Editor IPC Recv]', msg.cmd, msg);
+
+            // Handle Request-Response resolution
+            if (msg.reqId && this.pendingReqs.has(msg.reqId)) {
+              const { resolve, timer } = this.pendingReqs.get(msg.reqId);
+              clearTimeout(timer);
+              this.pendingReqs.delete(msg.reqId);
+              resolve(msg);
+            }
+
             switch (msg.cmd) {
               case 'editor_init_ack':
                 this.sessionId = msg.sessionId || 0;
                 this.sessionName = msg.sessionName || 'Session';
                 this.host = msg.host || '';
                 document.getElementById('session-badge').textContent = `${this.sessionName} (${this.host})`;
-                document.getElementById('status-conn').textContent = `● SFTP 宿主已联通 (${this.host})`;
+                document.getElementById('status-conn').textContent = `● 宿主已联通 (${this.host})`;
+                break;
+
+              case 'sftp_ready':
+                this.homedir = msg.homedir || '/';
+                this.currentDir = this.homedir;
+                document.getElementById('status-conn').textContent = `● SFTP 就绪 (${this.host})`;
+                document.getElementById('sidebar-path-input').value = this.currentDir;
+                this.loadDirectory(this.currentDir);
+                break;
+
+              case 'sftp_error':
+                document.getElementById('status-conn').textContent = `⚠️ SFTP 错误`;
+                this.showToast('SFTP 错误: ' + (msg.error || '未知错误'));
+                const tree = document.getElementById('file-tree-container');
+                tree.innerHTML = `
+                  <div class="tree-node" style="color: #f48771;">
+                    <span class="node-icon">⚠️</span>
+                    <span>${msg.error || 'SFTP 连接失败'}</span>
+                  </div>
+                `;
                 break;
 
               case 'open_file':
-                this.handleOpenFile(msg.path, msg.line);
-                break;
-
-              case 'status_msg':
-                document.getElementById('status-conn').textContent = msg.text || '';
+                this.openFile(msg.path, msg.line);
                 break;
 
               case 'pong':
-                console.log('Pong received from C host');
+                console.log('Pong from host');
                 break;
             }
           } catch (err) {
@@ -514,85 +707,457 @@
           }
         },
 
-        handleOpenFile(path, line) {
-          if (!path) return;
-          console.log('[Editor] Open file requested:', path, 'Line:', line);
-          document.getElementById('empty-state').style.display = 'none';
-          const ph = document.getElementById('monaco-placeholder');
-          ph.style.display = 'block';
-          ph.textContent = `// [Scaffold View] File: ${path}\n// Target Line: ${line || 1}\n// (Monaco Editor full syntax highlighting & edit engine will mount here in Milestone 4)`;
-          document.getElementById('status-path').textContent = path;
-          if (line > 0) {
-            document.getElementById('status-pos').textContent = `Ln ${line}, Col 1`;
-          }
-
-          // Render / update Tab
-          this.addTab(path);
+        // SFTP operations
+        async listDir(path) {
+          return this.request('sftp_list_dir', { path });
         },
 
-        addTab(path) {
-          const tabBar = document.getElementById('tab-bar');
-          const basename = path.split('/').pop() || path;
-          
-          // Clear active tabs
-          Array.from(tabBar.children).forEach(t => t.classList.remove('active'));
+        async readFile(path) {
+          return this.request('sftp_read_file', { path });
+        },
 
-          let existingTab = Array.from(tabBar.children).find(t => t.dataset.path === path);
-          if (existingTab) {
-            existingTab.classList.add('active');
+        async writeFile(path, content, isBinary = false) {
+          return this.request('sftp_write_file', { path, content, isBinary });
+        },
+
+        async stat(path) {
+          return this.request('sftp_stat', { path });
+        },
+
+        async loadDirectory(path) {
+          const tree = document.getElementById('file-tree-container');
+          tree.innerHTML = `
+            <div class="tree-node active">
+              <span class="node-icon">⏳</span>
+              <span>正在读取目录...</span>
+            </div>
+          `;
+          try {
+            const resp = await this.listDir(path);
+            if (!resp.success) {
+              tree.innerHTML = `
+                <div class="tree-node" style="color: #f48771;">
+                  <span class="node-icon">⚠️</span>
+                  <span>读取失败: ${resp.error || ''}</span>
+                </div>
+              `;
+              return;
+            }
+
+            this.currentDir = path;
+            document.getElementById('sidebar-path-input').value = path;
+            document.getElementById('status-path').textContent = path;
+
+            const entries = resp.entries || [];
+            entries.sort((a, b) => {
+              if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            });
+
+            tree.innerHTML = '';
+
+            // Add parent ".." entry if not root
+            if (path !== '/' && path !== '') {
+              const upNode = document.createElement('div');
+              upNode.className = 'tree-node';
+              upNode.innerHTML = `
+                <div class="tree-node-left">
+                  <span class="node-icon">📁</span>
+                  <span>..</span>
+                </div>
+              `;
+              upNode.addEventListener('click', () => {
+                const parent = path.replace(/\/[^/]+\/?$/, '') || '/';
+                this.loadDirectory(parent);
+              });
+              tree.appendChild(upNode);
+            }
+
+            for (const item of entries) {
+              const node = document.createElement('div');
+              node.className = 'tree-node';
+              const fullPath = path.endsWith('/') ? `${path}${item.name}` : `${path}/${item.name}`;
+              const icon = this.getFileIcon(item.name, item.isDir);
+              const sizeStr = item.isDir ? '' : this.formatSize(item.size);
+
+              node.innerHTML = `
+                <div class="tree-node-left" title="${item.name}">
+                  <span class="node-icon">${icon}</span>
+                  <span>${item.name}</span>
+                </div>
+                ${sizeStr ? `<span class="tree-node-size">${sizeStr}</span>` : ''}
+              `;
+
+              node.addEventListener('click', () => {
+                if (item.isDir) {
+                  this.loadDirectory(fullPath);
+                } else {
+                  this.openFile(fullPath);
+                }
+              });
+
+              tree.appendChild(node);
+            }
+
+            if (entries.length === 0) {
+              tree.innerHTML = `
+                <div class="tree-node" style="color: var(--text-muted);">
+                  <span class="node-icon">📂</span>
+                  <span>空目录</span>
+                </div>
+              `;
+            }
+          } catch (err) {
+            tree.innerHTML = `
+              <div class="tree-node" style="color: #f48771;">
+                <span class="node-icon">⚠️</span>
+                <span>请求超时或异常</span>
+              </div>
+            `;
+          }
+        },
+
+        async openFile(path, targetLine = 1) {
+          if (!path) return;
+          console.log('[Editor] openFile:', path, 'line:', targetLine);
+
+          if (this.tabs.has(path)) {
+            this.switchTab(path, targetLine);
             return;
           }
 
+          this.showToast('正在读取 ' + (path.split('/').pop() || path));
+          try {
+            const resp = await this.readFile(path);
+            if (!resp.success) {
+              this.showToast('读取文件失败: ' + (resp.error || '未知错误'));
+              return;
+            }
+
+            const name = path.split('/').pop() || path;
+            const tabData = {
+              path,
+              name,
+              content: resp.content || '',
+              originalContent: resp.content || '',
+              isDirty: false,
+              isPinned: false,
+              isBinary: !!resp.isBinary,
+              size: resp.size || 0
+            };
+
+            this.tabs.set(path, tabData);
+            this.createTabElement(tabData);
+            this.switchTab(path, targetLine);
+          } catch (err) {
+            this.showToast('读取超时: ' + err.message);
+          }
+        },
+
+        createTabElement(tabData) {
+          const tabBar = document.getElementById('tab-bar');
           const tab = document.createElement('div');
-          tab.className = 'tab-item active';
-          tab.dataset.path = path;
+          tab.className = 'tab-item';
+          tab.dataset.path = tabData.path;
+          tab.title = tabData.path;
           tab.innerHTML = `
             <span class="tab-pin-icon">📌</span>
-            <span>${basename}</span>
+            <span>${tabData.name}</span>
             <span class="tab-dirty-indicator"></span>
             <span class="tab-close-btn" title="关闭">✕</span>
           `;
 
-          tab.addEventListener('click', (e) => {
+          tab.addEventListener('click', e => {
             if (e.target.classList.contains('tab-close-btn')) {
-              tab.remove();
-              if (tabBar.children.length === 0) {
-                document.getElementById('empty-state').style.display = 'flex';
-                document.getElementById('monaco-placeholder').style.display = 'none';
-              } else {
-                tabBar.lastElementChild.click();
-              }
+              this.closeTab(tabData.path);
               return;
             }
-            Array.from(tabBar.children).forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            document.getElementById('status-path').textContent = path;
+            this.switchTab(tabData.path);
           });
 
-          // Double click to Pin Tab
+          tab.addEventListener('auxclick', e => {
+            if (e.button === 1) this.closeTab(tabData.path);
+          });
+
           tab.addEventListener('dblclick', () => {
-            tab.classList.toggle('pinned');
+            tabData.isPinned = !tabData.isPinned;
+            tab.classList.toggle('pinned', tabData.isPinned);
           });
 
           tabBar.appendChild(tab);
+        },
+
+        switchTab(path, targetLine = 1) {
+          const tabData = this.tabs.get(path);
+          if (!tabData) return;
+
+          this.activePath = path;
+
+          const tabBar = document.getElementById('tab-bar');
+          Array.from(tabBar.children).forEach(el => {
+            el.classList.toggle('active', el.dataset.path === path);
+          });
+
+          document.getElementById('empty-state').style.display = 'none';
+
+          const editorWrapper = document.getElementById('editor-wrapper');
+          const imageWrapper = document.getElementById('image-wrapper');
+          const textarea = document.getElementById('editor-textarea');
+
+          const isImg = /\.(png|jpg|jpeg|gif|webp|svg|ico)$/i.test(path);
+          if (isImg && tabData.isBinary) {
+            editorWrapper.style.display = 'none';
+            imageWrapper.style.display = 'flex';
+            const img = document.getElementById('image-element');
+            const mime = path.endsWith('.png') ? 'image/png' :
+                         (path.endsWith('.jpg') || path.endsWith('.jpeg')) ? 'image/jpeg' :
+                         path.endsWith('.gif') ? 'image/gif' :
+                         path.endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+            img.src = `data:${mime};base64,${tabData.content}`;
+            img.onload = () => {
+              document.getElementById('image-info').textContent = `${img.naturalWidth} × ${img.naturalHeight} px (${this.formatSize(tabData.size)})`;
+            };
+          } else {
+            imageWrapper.style.display = 'none';
+            editorWrapper.style.display = 'flex';
+            textarea.value = tabData.content;
+            this.updateLineNumbers();
+
+            if (targetLine > 1) {
+              this.jumpToLine(targetLine);
+            }
+          }
+
+          document.getElementById('status-path').textContent = path;
+          document.getElementById('status-lang').textContent = this.getLanguageName(path);
+        },
+
+        closeTab(path) {
+          const tabData = this.tabs.get(path);
+          if (!tabData) return;
+
+          if (tabData.isDirty) {
+            if (!confirm(`文件 "${tabData.name}" 已修改但尚未保存，确定要关闭吗？`)) {
+              return;
+            }
+          }
+
+          this.tabs.delete(path);
+          const tabBar = document.getElementById('tab-bar');
+          const tabEl = Array.from(tabBar.children).find(el => el.dataset.path === path);
+          if (tabEl) tabEl.remove();
+
+          if (this.activePath === path) {
+            const remaining = Array.from(this.tabs.keys());
+            if (remaining.length > 0) {
+              this.switchTab(remaining[remaining.length - 1]);
+            } else {
+              this.activePath = null;
+              document.getElementById('editor-wrapper').style.display = 'none';
+              document.getElementById('image-wrapper').style.display = 'none';
+              document.getElementById('empty-state').style.display = 'flex';
+              document.getElementById('status-path').textContent = '/';
+            }
+          }
+        },
+
+        async saveActiveFile() {
+          if (!this.activePath) return;
+          const tabData = this.tabs.get(this.activePath);
+          if (!tabData) return;
+
+          const textarea = document.getElementById('editor-textarea');
+          const content = textarea.value;
+
+          this.showToast('正在保存...');
+          try {
+            const resp = await this.writeFile(tabData.path, content, false);
+            if (resp.success) {
+              tabData.originalContent = content;
+              tabData.content = content;
+              tabData.isDirty = false;
+
+              const tabBar = document.getElementById('tab-bar');
+              const tabEl = Array.from(tabBar.children).find(el => el.dataset.path === tabData.path);
+              if (tabEl) tabEl.classList.remove('dirty');
+
+              this.showToast('已保存: ' + tabData.name);
+            } else {
+              this.showToast('保存失败: ' + (resp.error || '未知错误'));
+            }
+          } catch (err) {
+            this.showToast('保存超时: ' + err.message);
+          }
+        },
+
+        jumpToLine(line) {
+          const textarea = document.getElementById('editor-textarea');
+          const lines = textarea.value.split('\n');
+          let pos = 0;
+          for (let i = 0; i < line - 1 && i < lines.length; i++) {
+            pos += lines[i].length + 1;
+          }
+          textarea.setSelectionRange(pos, pos);
+          textarea.focus();
+          const lineHeight = 20.25;
+          textarea.scrollTop = Math.max(0, (line - 5) * lineHeight);
+          this.updateCursorPos();
+        },
+
+        updateLineNumbers() {
+          const textarea = document.getElementById('editor-textarea');
+          const lineNums = document.getElementById('line-numbers');
+          const lines = textarea.value.split('\n').length;
+          let html = '';
+          for (let i = 1; i <= lines; i++) {
+            html += i + '<br>';
+          }
+          lineNums.innerHTML = html;
+        },
+
+        updateCursorPos() {
+          const textarea = document.getElementById('editor-textarea');
+          const selStart = textarea.selectionStart;
+          const textBefore = textarea.value.substring(0, selStart);
+          const lines = textBefore.split('\n');
+          const curLine = lines.length;
+          const curCol = lines[lines.length - 1].length + 1;
+          document.getElementById('status-pos').textContent = `Ln ${curLine}, Col ${curCol}`;
+        },
+
+        showToast(msg) {
+          const toast = document.getElementById('toast');
+          toast.textContent = msg;
+          toast.classList.add('show');
+          clearTimeout(this.toastTimer);
+          this.toastTimer = setTimeout(() => {
+            toast.classList.remove('show');
+          }, 2500);
+        },
+
+        getFileIcon(name, isDir) {
+          if (isDir) return '📁';
+          if (/\.(png|jpg|jpeg|gif|webp|svg|ico)$/i.test(name)) return '🖼️';
+          if (/\.(c|h|cpp|hpp)$/i.test(name)) return '🇨';
+          if (/\.(js|mjs|cjs)$/i.test(name)) return '🟨';
+          if (/\.(ts|tsx)$/i.test(name)) return '🔷';
+          if (/\.(py|pyw)$/i.test(name)) return '🐍';
+          if (/\.(html|htm)$/i.test(name)) return '🌐';
+          if (/\.(css|scss|less)$/i.test(name)) return '🎨';
+          if (/\.(json|yaml|yml|xml|toml)$/i.test(name)) return '⚙️';
+          if (/\.(sh|bash|zsh)$/i.test(name)) return '💻';
+          if (/\.(md|markdown|txt)$/i.test(name)) return '📝';
+          return '📄';
+        },
+
+        getLanguageName(path) {
+          if (/\.(c|h)$/i.test(path)) return 'C / C++';
+          if (/\.(cpp|hpp|cc|cxx)$/i.test(path)) return 'C++';
+          if (/\.(js|jsx)$/i.test(path)) return 'JavaScript';
+          if (/\.(ts|tsx)$/i.test(path)) return 'TypeScript';
+          if (/\.py$/i.test(path)) return 'Python';
+          if (/\.html$/i.test(path)) return 'HTML';
+          if (/\.css$/i.test(path)) return 'CSS';
+          if (/\.json$/i.test(path)) return 'JSON';
+          if (/\.md$/i.test(path)) return 'Markdown';
+          if (/\.sh$/i.test(path)) return 'Shell Script';
+          if (/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(path)) return 'Image';
+          return 'Plain Text';
+        },
+
+        formatSize(bytes) {
+          if (!bytes || bytes <= 0) return '0 B';
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+          return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
       };
 
-      // 2. UI Action Bindings
+      // 2. UI Bindings
       document.getElementById('btn-close').addEventListener('click', () => {
         bridge.send({ cmd: 'close' });
       });
 
       document.getElementById('btn-refresh').addEventListener('click', () => {
-        bridge.send({ cmd: 'ping' });
+        bridge.loadDirectory(bridge.currentDir);
       });
 
-      // 3. Resizer Drag Logic
+      document.getElementById('btn-tree-refresh').addEventListener('click', () => {
+        bridge.loadDirectory(bridge.currentDir);
+      });
+
+      document.getElementById('btn-tree-up').addEventListener('click', () => {
+        if (bridge.currentDir !== '/' && bridge.currentDir !== '') {
+          const parent = bridge.currentDir.replace(/\/[^/]+\/?$/, '') || '/';
+          bridge.loadDirectory(parent);
+        }
+      });
+
+      document.getElementById('btn-tree-new').addEventListener('click', async () => {
+        const name = prompt('输入新文件名：', 'new_file.txt');
+        if (!name || !name.trim()) return;
+        const targetPath = bridge.currentDir.endsWith('/') ?
+          `${bridge.currentDir}${name.trim()}` : `${bridge.currentDir}/${name.trim()}`;
+        try {
+          const resp = await bridge.writeFile(targetPath, '', false);
+          if (resp.success) {
+            await bridge.loadDirectory(bridge.currentDir);
+            bridge.openFile(targetPath);
+          } else {
+            alert('创建文件失败: ' + (resp.error || '未知错误'));
+          }
+        } catch (e) {
+          alert('操作超时: ' + e.message);
+        }
+      });
+
+      document.getElementById('sidebar-path-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          const p = e.target.value.trim();
+          if (p) bridge.loadDirectory(p);
+        }
+      });
+
+      document.getElementById('btn-save').addEventListener('click', () => {
+        bridge.saveActiveFile();
+      });
+
+      window.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          bridge.saveActiveFile();
+        }
+      });
+
+      const textarea = document.getElementById('editor-textarea');
+      const lineNums = document.getElementById('line-numbers');
+
+      textarea.addEventListener('input', () => {
+        bridge.updateLineNumbers();
+        if (bridge.activePath) {
+          const tabData = bridge.tabs.get(bridge.activePath);
+          if (tabData) {
+            tabData.content = textarea.value;
+            tabData.isDirty = (tabData.content !== tabData.originalContent);
+            const tabBar = document.getElementById('tab-bar');
+            const tabEl = Array.from(tabBar.children).find(el => el.dataset.path === tabData.path);
+            if (tabEl) tabEl.classList.toggle('dirty', tabData.isDirty);
+          }
+        }
+      });
+
+      textarea.addEventListener('scroll', () => {
+        lineNums.scrollTop = textarea.scrollTop;
+      });
+
+      textarea.addEventListener('keyup', () => bridge.updateCursorPos());
+      textarea.addEventListener('click', () => bridge.updateCursorPos());
+
       const resizer = document.getElementById('sidebar-resizer');
       const sidebar = document.getElementById('sidebar');
       let isResizing = false;
 
-      resizer.addEventListener('mousedown', e => {
+      resizer.addEventListener('mousedown', () => {
         isResizing = true;
         resizer.classList.add('resizing');
         document.body.style.cursor = 'col-resize';
@@ -600,7 +1165,7 @@
 
       window.addEventListener('mousemove', e => {
         if (!isResizing) return;
-        const newWidth = Math.max(160, Math.min(500, e.clientX));
+        const newWidth = Math.max(160, Math.min(600, e.clientX));
         sidebar.style.width = newWidth + 'px';
       });
 
@@ -612,10 +1177,8 @@
         }
       });
 
-      // Expose globally
       window.EditorBridge = bridge;
 
-      // Start Handshake
       window.addEventListener('DOMContentLoaded', () => {
         bridge.init();
       });

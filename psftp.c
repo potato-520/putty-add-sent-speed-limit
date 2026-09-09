@@ -34,6 +34,7 @@ static LogContext *psftp_logctx = NULL;
 static Backend *backend;
 static Conf *conf;
 static bool sent_eof = false;
+static bool rpc_mode = false;
 
 /* ------------------------------------------------------------
  * Seat vtable.
@@ -2361,8 +2362,10 @@ static int do_sftp_init(void)
                 fxp_error());
         homedir = dupstr(".");
     } else {
-        with_stripctrl(san, homedir)
-            printf("Remote working directory is %s\n", san);
+        if (!rpc_mode) {
+            with_stripctrl(san, homedir)
+                printf("Remote working directory is %s\n", san);
+        }
     }
     pwd = dupstr(homedir);
     return 0;
@@ -2393,10 +2396,396 @@ static void do_sftp_cleanup(void)
     }
 }
 
+static void escape_json_string(strbuf *sb, const char *s)
+{
+    put_byte(sb, '"');
+    if (s) {
+        for (; *s; s++) {
+            unsigned char c = (unsigned char)*s;
+            if (c == '"') put_asciz(sb, "\\\"");
+            else if (c == '\\') put_asciz(sb, "\\\\");
+            else if (c == '\b') put_asciz(sb, "\\b");
+            else if (c == '\f') put_asciz(sb, "\\f");
+            else if (c == '\n') put_asciz(sb, "\\n");
+            else if (c == '\r') put_asciz(sb, "\\r");
+            else if (c == '\t') put_asciz(sb, "\\t");
+            else if (c < 32) put_fmt(sb, "\\u%04x", c);
+            else put_byte(sb, c);
+        }
+    }
+    put_byte(sb, '"');
+}
+
+static char *json_get_str(const char *json, const char *key)
+{
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return NULL;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return NULL;
+    p++;
+
+    strbuf *sb = strbuf_new();
+    while (*p && *p != '"') {
+        if (*p == '\\' && *(p+1)) {
+            p++;
+            if (*p == 'n') put_byte(sb, '\n');
+            else if (*p == 'r') put_byte(sb, '\r');
+            else if (*p == 't') put_byte(sb, '\t');
+            else if (*p == '\\') put_byte(sb, '\\');
+            else if (*p == '"') put_byte(sb, '"');
+            else put_byte(sb, *p);
+        } else {
+            put_byte(sb, *p);
+        }
+        p++;
+    }
+    char *ret = dupstr(sb->s);
+    strbuf_free(sb);
+    return ret;
+}
+
+static int json_get_int(const char *json, const char *key)
+{
+    char pattern[64];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return 0;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == ':') p++;
+    return atoi(p);
+}
+
+static void rpc_list_dir(int req_id, const char *path)
+{
+    char *cpath = canonify(path);
+    struct sftp_request *req = fxp_opendir_send(cpath);
+    struct sftp_packet *pktin = sftp_wait_for_reply(req);
+    struct fxp_handle *dirh = fxp_opendir_recv(pktin, req);
+
+    if (!dirh) {
+        printf("{\"cmd\":\"sftp_list_dir_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
+               req_id, path, fxp_error());
+        fflush(stdout);
+        sfree(cpath);
+        return;
+    }
+
+    strbuf *sb = strbuf_new();
+    put_fmt(sb, "{\"cmd\":\"sftp_list_dir_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":true,\"entries\":[",
+            req_id, path);
+
+    bool first = true;
+    while (1) {
+        req = fxp_readdir_send(dirh);
+        pktin = sftp_wait_for_reply(req);
+        struct fxp_names *names = fxp_readdir_recv(pktin, req);
+        if (!names) {
+            break;
+        }
+        if (names->nnames == 0) {
+            fxp_free_names(names);
+            break;
+        }
+        for (int i = 0; i < names->nnames; i++) {
+            const char *fn = names->names[i].filename;
+            if (!strcmp(fn, ".") || !strcmp(fn, ".."))
+                continue;
+            bool is_dir = false;
+            if (names->names[i].attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) {
+                if (names->names[i].attrs.permissions & 0040000)
+                    is_dir = true;
+            }
+            uint64_t size = 0;
+            if (names->names[i].attrs.flags & SSH_FILEXFER_ATTR_SIZE)
+                size = names->names[i].attrs.size;
+            unsigned long mtime = 0;
+            if (names->names[i].attrs.flags & SSH_FILEXFER_ATTR_ACMODTIME)
+                mtime = names->names[i].attrs.mtime;
+            unsigned long perms = 0;
+            if (names->names[i].attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS)
+                perms = names->names[i].attrs.permissions;
+
+            if (!first) put_asciz(sb, ",");
+            first = false;
+
+            put_asciz(sb, "{\"name\":");
+            escape_json_string(sb, fn);
+            put_fmt(sb, ",\"isDir\":%s,\"size\":%"PRIu64",\"mtime\":%lu,\"permissions\":%lu}",
+                    is_dir ? "true" : "false", size, mtime, perms);
+        }
+        fxp_free_names(names);
+    }
+
+    req = fxp_close_send(dirh);
+    pktin = sftp_wait_for_reply(req);
+    fxp_close_recv(pktin, req);
+    sfree(cpath);
+
+    put_asciz(sb, "]}\n");
+    fputs(sb->s, stdout);
+    fflush(stdout);
+    strbuf_free(sb);
+}
+
+static void rpc_read_file(int req_id, const char *path)
+{
+    char *cpath = canonify(path);
+    struct sftp_request *req = fxp_open_send(cpath, SSH_FXF_READ, NULL);
+    struct sftp_packet *pktin = sftp_wait_for_reply(req);
+    struct fxp_handle *fh = fxp_open_recv(pktin, req);
+
+    if (!fh) {
+        printf("{\"cmd\":\"sftp_read_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
+               req_id, path, fxp_error());
+        fflush(stdout);
+        sfree(cpath);
+        return;
+    }
+
+    struct fxp_xfer *xfer = xfer_download_init(fh, 0);
+    strbuf *data_sb = strbuf_new();
+    bool ok = true;
+
+    while (!xfer_done(xfer)) {
+        void *vbuf;
+        int len;
+        xfer_download_queue(xfer);
+        pktin = sftp_recv();
+        int retd = xfer_download_gotpkt(xfer, pktin);
+        if (retd <= 0) {
+            if (retd == INT_MIN) sfree(pktin);
+            ok = false;
+            break;
+        }
+        while (xfer_download_data(xfer, &vbuf, &len)) {
+            put_data(data_sb, vbuf, len);
+            sfree(vbuf);
+        }
+    }
+    xfer_cleanup(xfer);
+
+    req = fxp_close_send(fh);
+    pktin = sftp_wait_for_reply(req);
+    fxp_close_recv(pktin, req);
+    sfree(cpath);
+
+    if (!ok) {
+        printf("{\"cmd\":\"sftp_read_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"Read failed\"}\n",
+               req_id, path);
+        fflush(stdout);
+        strbuf_free(data_sb);
+        return;
+    }
+
+    bool is_binary = false;
+    for (size_t i = 0; i < data_sb->len; i++) {
+        if (data_sb->s[i] == '\0') {
+            is_binary = true;
+            break;
+        }
+    }
+
+    strbuf *sb = strbuf_new();
+    put_fmt(sb, "{\"cmd\":\"sftp_read_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":true,\"size\":%zu,\"isBinary\":%s,\"content\":",
+            req_id, path, data_sb->len, is_binary ? "true" : "false");
+    if (is_binary) {
+        strbuf *b64 = base64_encode_sb(ptrlen_from_strbuf(data_sb), 0);
+        put_fmt(sb, "\"%s\"", b64->s);
+        strbuf_free(b64);
+    } else {
+        escape_json_string(sb, data_sb->s);
+    }
+    put_asciz(sb, "}\n");
+    fputs(sb->s, stdout);
+    fflush(stdout);
+
+    strbuf_free(data_sb);
+    strbuf_free(sb);
+}
+
+static void rpc_write_file(int req_id, const char *path, const char *content, bool is_base64)
+{
+    char *cpath = canonify(path);
+    struct sftp_request *req = fxp_open_send(cpath, SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_TRUNC, NULL);
+    struct sftp_packet *pktin = sftp_wait_for_reply(req);
+    struct fxp_handle *fh = fxp_open_recv(pktin, req);
+
+    if (!fh) {
+        printf("{\"cmd\":\"sftp_write_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
+               req_id, path, fxp_error());
+        fflush(stdout);
+        sfree(cpath);
+        return;
+    }
+
+    ptrlen to_write;
+    strbuf *decoded_sb = NULL;
+    if (is_base64 && content) {
+        decoded_sb = base64_decode_sb(ptrlen_from_asciz(content));
+        to_write = ptrlen_from_strbuf(decoded_sb);
+    } else {
+        to_write = ptrlen_from_asciz(content ? content : "");
+    }
+
+    struct fxp_xfer *xfer = xfer_upload_init(fh, 0);
+    const char *data_ptr = (const char *)to_write.ptr;
+    size_t remaining = to_write.len;
+    bool ok = true;
+
+    while (remaining > 0 || !xfer_done(xfer)) {
+        while (remaining > 0 && xfer_upload_ready(xfer)) {
+            int chunk = (int)(remaining > 16384 ? 16384 : remaining);
+            xfer_upload_data(xfer, (char*)data_ptr, chunk);
+            data_ptr += chunk;
+            remaining -= chunk;
+        }
+
+        pktin = sftp_recv();
+        int retd = xfer_upload_gotpkt(xfer, pktin);
+        if (retd <= 0) {
+            if (retd == INT_MIN) sfree(pktin);
+            ok = false;
+            break;
+        }
+    }
+    xfer_cleanup(xfer);
+
+    req = fxp_close_send(fh);
+    pktin = sftp_wait_for_reply(req);
+    fxp_close_recv(pktin, req);
+    sfree(cpath);
+    if (decoded_sb) strbuf_free(decoded_sb);
+
+    if (ok) {
+        printf("{\"cmd\":\"sftp_write_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":true}\n",
+               req_id, path);
+    } else {
+        printf("{\"cmd\":\"sftp_write_file_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"Write failed\"}\n",
+               req_id, path);
+    }
+    fflush(stdout);
+}
+
+static void rpc_stat(int req_id, const char *path)
+{
+    char *cpath = canonify(path);
+    struct sftp_request *req = fxp_stat_send(cpath);
+    struct sftp_packet *pktin = sftp_wait_for_reply(req);
+    struct fxp_attrs attrs;
+    bool result = fxp_stat_recv(pktin, req, &attrs);
+    sfree(cpath);
+
+    if (!result) {
+        printf("{\"cmd\":\"sftp_stat_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
+               req_id, path, fxp_error());
+        fflush(stdout);
+        return;
+    }
+
+    bool is_dir = false;
+    if (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) {
+        if (attrs.permissions & 0040000) is_dir = true;
+    }
+    uint64_t size = (attrs.flags & SSH_FILEXFER_ATTR_SIZE) ? attrs.size : 0;
+    unsigned long mtime = (attrs.flags & SSH_FILEXFER_ATTR_ACMODTIME) ? attrs.mtime : 0;
+    unsigned long perms = (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) ? attrs.permissions : 0;
+
+    printf("{\"cmd\":\"sftp_stat_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":true,\"isDir\":%s,\"size\":%"PRIu64",\"mtime\":%lu,\"permissions\":%lu}\n",
+           req_id, path, is_dir ? "true" : "false", size, mtime, perms);
+    fflush(stdout);
+}
+
+static void rpc_realpath(int req_id, const char *path)
+{
+    struct sftp_request *req = fxp_realpath_send(path ? path : ".");
+    struct sftp_packet *pktin = sftp_wait_for_reply(req);
+    char *canon = fxp_realpath_recv(pktin, req);
+    if (!canon) {
+        printf("{\"cmd\":\"sftp_realpath_resp\",\"reqId\":%d,\"path\":\"%s\",\"success\":false,\"error\":\"%s\"}\n",
+               req_id, path ? path : ".", fxp_error());
+        fflush(stdout);
+        return;
+    }
+
+    strbuf *sb = strbuf_new();
+    put_fmt(sb, "{\"cmd\":\"sftp_realpath_resp\",\"reqId\":%d,\"success\":true,\"path\":", req_id);
+    escape_json_string(sb, canon);
+    put_asciz(sb, "}\n");
+    fputs(sb->s, stdout);
+    fflush(stdout);
+    strbuf_free(sb);
+    sfree(canon);
+}
+
+static int do_sftp_rpc(void)
+{
+    char buf[65536];
+    strbuf *sb = strbuf_new();
+    put_asciz(sb, "{\"cmd\":\"sftp_ready\",\"homedir\":");
+    escape_json_string(sb, homedir ? homedir : "/");
+    put_asciz(sb, "}\n");
+    fputs(sb->s, stdout);
+    fflush(stdout);
+    strbuf_free(sb);
+
+    while (fgets(buf, sizeof(buf), stdin)) {
+        size_t len = strlen(buf);
+        while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n'))
+            buf[--len] = '\0';
+        if (len == 0) continue;
+
+        char *cmd = json_get_str(buf, "cmd");
+        int req_id = json_get_int(buf, "reqId");
+        if (!cmd) continue;
+
+        if (!strcmp(cmd, "sftp_list_dir") || !strcmp(cmd, "list_dir")) {
+            char *path = json_get_str(buf, "path");
+            rpc_list_dir(req_id, path ? path : ".");
+            sfree(path);
+        } else if (!strcmp(cmd, "sftp_read_file") || !strcmp(cmd, "read_file")) {
+            char *path = json_get_str(buf, "path");
+            if (path) {
+                rpc_read_file(req_id, path);
+                sfree(path);
+            }
+        } else if (!strcmp(cmd, "sftp_write_file") || !strcmp(cmd, "write_file")) {
+            char *path = json_get_str(buf, "path");
+            char *content = json_get_str(buf, "content");
+            bool is_b64 = (strstr(buf, "\"isBinary\":true") || strstr(buf, "\"isBinary\": true"));
+            if (path) {
+                rpc_write_file(req_id, path, content ? content : "", is_b64);
+                sfree(path);
+            }
+            sfree(content);
+        } else if (!strcmp(cmd, "sftp_stat") || !strcmp(cmd, "stat")) {
+            char *path = json_get_str(buf, "path");
+            rpc_stat(req_id, path ? path : ".");
+            sfree(path);
+        } else if (!strcmp(cmd, "sftp_realpath") || !strcmp(cmd, "realpath")) {
+            char *path = json_get_str(buf, "path");
+            rpc_realpath(req_id, path);
+            sfree(path);
+        } else if (!strcmp(cmd, "quit") || !strcmp(cmd, "exit")) {
+            sfree(cmd);
+            break;
+        }
+
+        sfree(cmd);
+    }
+    return 0;
+}
+
 int do_sftp(int mode, int modeflags, Filename *batchfile)
 {
     FILE *fp;
     int ret;
+
+    if (mode == 3) {
+        return do_sftp_rpc();
+    }
 
     /*
      * Batch mode?
@@ -2555,6 +2944,7 @@ static void usage(void)
     printf("  -hostkey keyid\n");
     printf("            manually specify a host key (may be repeated)\n");
     printf("  -batch    disable all interactive prompts\n");
+    printf("  -rpc      run in JSON-RPC headless mode for WebView2 editor\n");
     printf("  -no-sanitise-stderr  don't strip control chars from"
            " standard error\n");
     printf("  -proxycmd command\n");
@@ -2854,6 +3244,9 @@ int psftp_main(CmdlineArgList *arglist)
             modeflags = modeflags | 1;
         } else if (strcmp(argstr, "-be") == 0) {
             modeflags = modeflags | 2;
+        } else if (strcmp(argstr, "-rpc") == 0) {
+            mode = 3;
+            rpc_mode = true;
         } else if (strcmp(argstr, "-sanitise-stderr") == 0) {
             sanitise_stderr = true;
         } else if (strcmp(argstr, "-no-sanitise-stderr") == 0) {
