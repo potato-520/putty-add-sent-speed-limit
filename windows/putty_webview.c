@@ -2322,23 +2322,35 @@ static bool launch_wsl_code(const char *distro, const char *linux_path, int line
     wchar_t wpath[MAX_PATH * 2] = {0};
     MultiByteToWideChar(CP_UTF8, 0, linux_path, -1, wpath, sizeof(wpath) / sizeof(wchar_t));
 
-    wchar_t cmd[MAX_PATH * 4] = {0};
-    if (wdistro[0]) {
-        if (line > 0) {
-            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
-                       L"wsl.exe -d \"%s\" -- code -g \"%s:%d\"", wdistro, wpath, line);
-        } else {
-            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
-                       L"wsl.exe -d \"%s\" -- code -g \"%s\"", wdistro, wpath);
-        }
+    wchar_t wtarget[MAX_PATH * 2 + 32] = {0};
+    if (line > 0) {
+        _snwprintf(wtarget, sizeof(wtarget) / sizeof(wchar_t), L"%s:%d", wpath, line);
     } else {
-        if (line > 0) {
-            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
-                       L"wsl.exe -- code -g \"%s:%d\"", wpath, line);
-        } else {
-            _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
-                       L"wsl.exe -- code -g \"%s\"", wpath);
-        }
+        _snwprintf(wtarget, sizeof(wtarget) / sizeof(wchar_t), L"%s", wpath);
+    }
+
+    /*
+     * Build command line for wsl.exe using bash -lc so environment & PATH are properly sourced.
+     * Searches in order:
+     *   1) code in PATH
+     *   2) Windows VS Code bin/code via /mnt/c
+     *   3) ~/.vscode-server/bin/wildcard/bin/remote-cli/code
+     */
+    const wchar_t *script =
+        L"code -g \"$1\" 2>/dev/null || "
+        L"(for p in /mnt/c/Users/*/AppData/Local/Programs/\"Microsoft VS Code\"/bin/code "
+        L"\"/mnt/c/Program Files/Microsoft VS Code/bin/code\" ~/.vscode-server/bin/*/bin/remote-cli/code; "
+        L"do [ -x \"$p\" ] && \"$p\" -g \"$1\" && exit 0; done; exit 1)";
+
+    wchar_t cmd[MAX_PATH * 8] = {0};
+    if (wdistro[0]) {
+        _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
+                   L"wsl.exe -d \"%s\" -- bash -lc \"%s\" _ \"%s\"",
+                   wdistro, script, wtarget);
+    } else {
+        _snwprintf(cmd, sizeof(cmd) / sizeof(wchar_t),
+                   L"wsl.exe -- bash -lc \"%s\" _ \"%s\"",
+                   script, wtarget);
     }
 
     dbg_log("launch_wsl_code: running cmdline: %ls", cmd);
@@ -2353,14 +2365,35 @@ static bool launch_wsl_code(const char *distro, const char *linux_path, int line
 
     BOOL ok = CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
                              CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-    if (ok) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-        return true;
-    } else {
+    if (!ok) {
         dbg_log("launch_wsl_code: CreateProcessW failed with err=%lu", GetLastError());
         return false;
     }
+
+    /* Wait up to 3000ms for wsl.exe process to complete */
+    DWORD wait_res = WaitForSingleObject(pi.hProcess, 3000);
+    DWORD exit_code = 0;
+    if (wait_res == WAIT_OBJECT_0) {
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+        dbg_log("launch_wsl_code: wsl.exe process finished with exit code %lu", exit_code);
+    } else {
+        dbg_log("launch_wsl_code: wsl.exe process still active after 3s (backgrounded)");
+        exit_code = 0;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    if (exit_code != 0) {
+        dbg_log("launch_wsl_code: wsl.exe failed with exit_code=%lu", exit_code);
+        if (wdistro[0]) {
+            /* Try again without -d flag in case distro name differed */
+            dbg_log("launch_wsl_code: retrying without -d flag for default WSL instance");
+            return launch_wsl_code(NULL, linux_path, line);
+        }
+        return false;
+    }
+    return true;
 }
 
 static void url_decode(char *dst, const char *src)
