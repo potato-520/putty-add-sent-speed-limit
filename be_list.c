@@ -92,6 +92,7 @@ const struct BackendVtable *const backends[] = {
     &sshconn_backend,
 #endif
 #if CONPTY
+    &powershell_backend,
     &conpty_backend,
 #endif
 

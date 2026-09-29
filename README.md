@@ -5,7 +5,9 @@
 2. **SSH 外部私钥自动内存导入**：让 putty/plink 直接接受 OpenSSH/ssh.com 格式的 SSH2 私钥，减少手动转换 PPK 的操作；
 3. **自动日志目录配置**：支持配置自动保存日志文件的目录，方便集中管理会话日志；
 4. **关闭窗口免确认**：关闭窗口时不再弹出 `Are you sure you want to close this session?` 确认对话框，直接关闭窗口；
-5. **PuTTY-WebView 现代化多会话前端**：基于 WebView2 + xterm.js 构建现代化界面，支持多会话 Tab 拖拽与 VS Code 级停靠分屏、跨窗口拖拽剥离/吸附合并、WSL (ConPTY) 原生集成、单文件绿色便携版（内嵌资源与后台自愈同步）、全会话本地输入发送限速继承。
+5. **PuTTY-WebView 现代化多会话前端**：基于 WebView2 + xterm.js 构建现代化界面，支持多会话 Tab 拖拽与 VS Code 级停靠分屏、跨窗口拖拽剥离/吸附合并、单文件绿色便携版（内嵌资源与后台自愈同步）、全会话本地输入发送限速继承；
+6. **WSL 与 PowerShell 原生双终端集成**：原生支持在 Windows Pseudo Console (ConPTY) 下并行启动 WSL 与 PowerShell 终端，默认定位至 `C:\` 根目录，支持空白参数一键秒启；
+7. **Windows 原生构建与自动 Authenticode 代码签名**：提供一键式 `build.bat` 与 `clean.bat`，完成资源打包、CMake 编译与自动证书签名。
 
 本文件是本仓库的主 README，重点说明本地增强功能。官方原版源码说明保留在 [`README`](README)。
 
@@ -212,31 +214,58 @@ plink -ssh user@example.com -i ~/.ssh/id_rsa
 plink -ssh user@example.com -i mykey.ppk
 ```
 
-## 构建说明
+## 构建与代码签名说明
 
-本仓库保留了用于 WSL 调用 Windows 工具链构建的脚本：
+本仓库提供纯 Windows 原生的一键构建脚本与清理脚本：
 
-```bash
-./build.sh
+### 1. 一键构建与自动签名 (`build.bat`)
+
+在 Windows CMD 或 PowerShell 下直接运行：
+
+```cmd
+build.bat
 ```
+
+默认构建目标包含：`putty_webview`、`putty`、`plink`。
+脚本将依次执行：
+1. 自动定位系统中的 CMake 与 Python；
+2. 自动打包 Web 前端资源至 `windows/webview/webview_assets.zip`；
+3. 使用 Visual Studio 17 2022 (x64) 生成并编译 Release 配置；
+4. 构建成功后，自动调用 `sign_putty.ps1` 对 `build-vs/Release/` 下生成的二进制文件执行 Authenticode 数字代码签名。
+
+如需指定构建目标，可以直接传参：
+```cmd
+build.bat putty_webview
+build.bat putty plink
+```
+
+### 2. 清理构建目录 (`clean.bat`)
+
+```cmd
+clean.bat
+```
+可快速删除 `build-vs/` 临时生成目录。若加上 `--all` 参数，可一并清理打包的 zip 缓存。
+
+### 3. 代码签名证书导入
+
+首次在本机进行代码签名时，可右键管理员运行 `import_cert_admin.bat` 或运行 `import_cert.ps1`，将附带的 `PuTTY_WebView_CodeSigning.cer` 证书安装至本机的受信任根证书颁发机构及个人存储区中。
 
 构建产物目录：
 
 ```text
-build-vs/Release
-```
-
-本次改造已通过该脚本构建，生成：
-
-```text
-putty.exe
-plink.exe
+build-vs/Release/
+├── putty_webview.exe  (WebView2 现代化前端增强版，已签名)
+├── putty.exe          (经典原生 PuTTY，已签名)
+└── plink.exe          (Plink 命令行工具，已签名)
 ```
 
 ## 已验证内容
 
-- `./build.sh` 构建通过。
-- `./build.sh plink putty pscp psftp test_conf` 构建通过。
+- `build.bat` 全流程自动化构建与 Authenticode 证书自动签名通过（状态：Valid）。
+- `clean.bat` 快速清理与构建目录重建验证通过。
+- 配置对话框 `Connection type -> Other` 下拉框中，`PowerShell` 与 `WSL` 并存正常选择。
+- 新建 PowerShell 会话免除 Host Name 输入限制，直接点击 Open 即可秒启并定位到 `C:\` 根目录。
+- 修复读取 `CONF_remote_cmd` 时的 `CONF_TYPE_STR` 断言崩溃。
 - `plink --help` 能显示 `-sendrate bytes-per-second`。
 - `plink -sendrate abc ...` 会报错退出。
 - `plink -sendrate -1 ...` 会报错退出。

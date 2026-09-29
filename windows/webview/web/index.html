@@ -243,6 +243,15 @@
     .btn-group-action.btn-new-tab {
       font-size: 16px;
     }
+    .btn-group-action.btn-new-tab-dropdown {
+      font-size: 10px;
+      padding: 0 4px;
+      margin-left: -2px;
+      opacity: 0.8;
+    }
+    .btn-group-action.btn-new-tab-dropdown:hover {
+      opacity: 1;
+    }
     .btn-group-action.btn-record-log {
       color: #9da5b4;
     }
@@ -318,7 +327,7 @@
       left: 0;
       width: 100%;
       height: 100%;
-      padding: 4px 6px 0 6px;
+      padding: 4px 0 0 8px;
       display: none;
     }
     .term-view.active {
@@ -327,6 +336,22 @@
 
     .xterm .xterm-viewport {
       overflow-y: auto;
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar {
+      width: 10px;
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+      background: rgba(121, 121, 121, 0.4);
+      border-radius: 5px;
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+      background: rgba(100, 100, 100, 0.7);
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar-corner {
+      background: transparent;
     }
 
     /* Docking Overlay & 5-Zone Preview */
@@ -806,6 +831,95 @@
       font-size: 10.5px;
       margin-top: 4px;
     }
+    /* Terminal Find Widget (VS Code Parity) */
+    .find-widget {
+      position: fixed;
+      top: 38px;
+      right: 20px;
+      z-index: 2000;
+      background: #252526;
+      border: 1px solid #3c3c3c;
+      border-radius: 3px;
+      padding: 4px 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+      color: #cccccc;
+      font-size: 12px;
+      user-select: none;
+    }
+    .find-widget.hidden {
+      display: none !important;
+    }
+    .find-input-wrapper {
+      display: flex;
+      align-items: center;
+      position: relative;
+      background: #3c3c3c;
+      border: 1px solid #3c3c3c;
+      border-radius: 3px;
+      padding: 0 2px;
+      transition: border-color 0.15s;
+    }
+    .find-input-wrapper:focus-within {
+      border-color: #007acc;
+    }
+    #find-input {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #cccccc;
+      font-size: 12px;
+      font-family: inherit;
+      padding: 4px 6px;
+      width: 170px;
+    }
+    #find-input::placeholder {
+      color: #777777;
+    }
+    .find-options {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding-right: 2px;
+    }
+    .toggle-btn, .action-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #cccccc;
+      border-radius: 3px;
+      padding: 2px 5px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      line-height: 1;
+      font-family: inherit;
+    }
+    .toggle-btn:hover, .action-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .toggle-btn.active {
+      background: #0e639c;
+      border-color: #007acc;
+      color: #ffffff;
+    }
+    .find-status {
+      font-size: 11px;
+      color: #888888;
+      min-width: 50px;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .find-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
   </style>
 </head>
 <body>
@@ -843,8 +957,14 @@
       <span>⬒</span> 向下分屏 (Split Down)
     </div>
     <div class="menu-divider"></div>
+    <div class="menu-item" data-action="new-powershell">
+      <span style="color:#4fc1ff;">⚡</span> 新建本地 PowerShell 终端
+    </div>
+    <div class="menu-item" data-action="new-wsl">
+      <span style="color:#68d391;">🐧</span> 新建 WSL 终端
+    </div>
     <div class="menu-item" data-action="new">
-      <span>➕</span> 新建会话... (New Session...)
+      <span>➕</span> 新建远程会话... (New Session...)
     </div>
     <div class="menu-item" data-action="detach">
       <span>⧉</span> 移动到新窗口 (Move to New Window)
@@ -862,8 +982,52 @@
     </div>
   </div>
 
+  <!-- Custom Dropdown Menu for New Tab -->
+  <div id="new-tab-menu" class="context-menu" style="display: none; min-width: 210px;">
+    <div class="menu-item" data-action="new-powershell">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <polyline points="4 17 10 11 4 5"></polyline>
+        <line x1="12" y1="19" x2="20" y2="19"></line>
+      </svg>
+      <span>本地 PowerShell (Local)</span>
+    </div>
+    <div class="menu-item" data-action="new-wsl">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#68d391" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+        <line x1="8" y1="21" x2="16" y2="21"></line>
+        <line x1="12" y1="17" x2="12" y2="21"></line>
+      </svg>
+      <span>WSL 终端 (Linux)</span>
+    </div>
+    <div class="menu-divider"></div>
+    <div class="menu-item" data-action="new">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="16"></line>
+        <line x1="8" y1="12" x2="16" y2="12"></line>
+      </svg>
+      <span>PuTTY 会话配置... (Dialog)</span>
+    </div>
+  </div>
+
   <!-- Custom Dropdown Menu for Toolbox -->
   <div id="toolbox-menu" class="context-menu" style="display: none; min-width: 250px;">
+    <div class="menu-item" data-action="new-powershell">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#4fc1ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <polyline points="4 17 10 11 4 5"></polyline>
+        <line x1="12" y1="19" x2="20" y2="19"></line>
+      </svg>
+      <span>新建本地 PowerShell 终端</span>
+    </div>
+    <div class="menu-item" data-action="new-wsl">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#68d391" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+        <line x1="8" y1="21" x2="16" y2="21"></line>
+        <line x1="12" y1="17" x2="12" y2="21"></line>
+      </svg>
+      <span>新建 WSL 终端</span>
+    </div>
+    <div class="menu-divider"></div>
     <div class="menu-item" data-action="open-editor">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -1040,9 +1204,30 @@
   <!-- Terminal Link Tooltip -->
   <div id="term-link-tooltip"></div>
 
+  <!-- Terminal Find Widget (VS Code Parity) -->
+  <div id="terminal-find-widget" class="find-widget hidden">
+    <div class="find-input-wrapper">
+      <input type="text" id="find-input" placeholder="查找 (Find)..." spellcheck="false" autocomplete="off" />
+      <div class="find-options">
+        <button id="find-opt-case" class="toggle-btn" title="区分大小写 (Alt+C)">Aa</button>
+        <button id="find-opt-whole" class="toggle-btn" title="全字匹配 (Alt+W)">\b</button>
+        <button id="find-opt-regex" class="toggle-btn" title="使用正则表达式 (Alt+R)">.*</button>
+      </div>
+    </div>
+    <div class="find-status" id="find-status"></div>
+    <div class="find-actions">
+      <button id="find-btn-prev" class="action-btn" title="上一个匹配项 (Shift+Enter)">▲</button>
+      <button id="find-btn-next" class="action-btn" title="下一个匹配项 (Enter)">▼</button>
+      <button id="find-btn-close" class="action-btn" title="关闭 (Escape)">✕</button>
+    </div>
+  </div>
+
   <script src="xterm.js"></script>
   <script src="xterm-addon-fit.js"></script>
   <script src="xterm-addon-web-links.js"></script>
+  <script src="xterm-addon-unicode11.js"></script>
+  <script src="xterm-addon-webgl.js"></script>
+  <script src="xterm-addon-search.js"></script>
   <script>
     const termTheme = {
       background: '#1e1e1e',
@@ -1073,6 +1258,107 @@
         window.chrome.webview.postMessage(type + data);
       }
     }
+
+    // VS Code-aligned Terminal Resize Debouncer
+    class TerminalResizeDebouncer {
+      constructor(onResize) {
+        this._onResize = onResize; // (id, { cols, rows }) => void
+        this._latest = new Map();
+        this._lastFired = new Map();
+        this._timers = new Map();
+      }
+
+      resize(id, cols, rows, immediate = false) {
+        if (isNaN(cols) || isNaN(rows) || cols <= 0 || rows <= 0) return;
+        const last = this._lastFired.get(id);
+        if (last && last.cols === cols && last.rows === rows) return;
+
+        this._latest.set(id, { cols, rows });
+
+        if (immediate) {
+          this.flush(id);
+          return;
+        }
+
+        const colsChanged = !last || last.cols !== cols;
+        const delay = colsChanged ? 100 : 16;
+
+        if (this._timers.has(id)) {
+          clearTimeout(this._timers.get(id));
+        }
+
+        const timer = setTimeout(() => {
+          this._timers.delete(id);
+          this.flush(id);
+        }, delay);
+        this._timers.set(id, timer);
+      }
+
+      flush(id) {
+        if (this._timers.has(id)) {
+          clearTimeout(this._timers.get(id));
+          this._timers.delete(id);
+        }
+        const target = this._latest.get(id);
+        if (!target) return;
+        const last = this._lastFired.get(id);
+        if (last && last.cols === target.cols && last.rows === target.rows) return;
+        this._lastFired.set(id, { cols: target.cols, rows: target.rows });
+        this._onResize(id, target);
+      }
+
+      flushAll() {
+        for (const id of Array.from(this._latest.keys())) {
+          this.flush(id);
+        }
+      }
+
+      clear(id) {
+        if (this._timers.has(id)) {
+          clearTimeout(this._timers.get(id));
+          this._timers.delete(id);
+        }
+        this._latest.delete(id);
+        this._lastFired.delete(id);
+      }
+    }
+
+    const resizeDebouncer = new TerminalResizeDebouncer((id, dims) => {
+      sendToHost('1', `${id}:${JSON.stringify(dims)}`);
+    });
+    window.TerminalResizeDebouncer = TerminalResizeDebouncer;
+    window.resizeDebouncer = resizeDebouncer;
+
+    // VS Code-aligned ACK Ring Flow Control & Backpressure Channel
+    function ackSessionData(s, id, count) {
+      if (!s || count <= 0) return;
+      s.pendingAckBytes = (s.pendingAckBytes || 0) + count;
+      // 当累积消费达到 16KB 时立即发送 ACK
+      if (s.pendingAckBytes >= 16384) {
+        flushSessionAck(s, id);
+      } else if (!s.ackTimer) {
+        // 未满 16KB 时在单帧 16ms 内刷新，防止尾部延迟
+        s.ackTimer = setTimeout(() => {
+          flushSessionAck(s, id);
+        }, 16);
+      }
+    }
+
+    function flushSessionAck(s, id) {
+      if (!s) return;
+      if (s.ackTimer) {
+        clearTimeout(s.ackTimer);
+        s.ackTimer = null;
+      }
+      const bytes = s.pendingAckBytes || 0;
+      if (bytes > 0) {
+        s.pendingAckBytes = 0;
+        sendToHost('K', `${id}:${bytes}`);
+      }
+    }
+
+    window.ackSessionData = ackSessionData;
+    window.flushSessionAck = flushSessionAck;
 
     let activeHoverLink = null;
     const linkTooltipEl = document.getElementById('term-link-tooltip');
@@ -1125,7 +1411,9 @@
     let contextMenuTargetId = null;
     const contextMenuEl = document.getElementById('tab-context-menu');
     const toolboxMenuEl = document.getElementById('toolbox-menu');
+    const newTabMenuEl = document.getElementById('new-tab-menu');
     let activeToolboxBtn = null;
+    let activeNewTabBtn = null;
 
     function hideToolboxMenu() {
       if (toolboxMenuEl) {
@@ -1134,6 +1422,35 @@
       if (activeToolboxBtn) {
         activeToolboxBtn.classList.remove('active');
         activeToolboxBtn = null;
+      }
+    }
+
+    function hideNewTabMenu() {
+      if (newTabMenuEl) {
+        newTabMenuEl.style.display = 'none';
+      }
+      if (activeNewTabBtn) {
+        activeNewTabBtn.classList.remove('active');
+        activeNewTabBtn = null;
+      }
+    }
+
+    function showNewTabMenu(anchorEl, gid) {
+      if (!newTabMenuEl) return;
+      const isVisible = newTabMenuEl.style.display !== 'none' && activeNewTabBtn === anchorEl;
+      if (contextMenuEl) contextMenuEl.style.display = 'none';
+      hideToolboxMenu();
+      hideNewTabMenu();
+      if (!isVisible) {
+        newTabMenuEl.dataset.gid = gid;
+        const rect = anchorEl.getBoundingClientRect();
+        newTabMenuEl.style.top = `${rect.bottom + 4}px`;
+        const menuWidth = 210;
+        const left = Math.max(10, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 10));
+        newTabMenuEl.style.left = `${left}px`;
+        newTabMenuEl.style.display = 'block';
+        anchorEl.classList.add('active');
+        activeNewTabBtn = anchorEl;
       }
     }
 
@@ -1233,11 +1550,28 @@
         btnNewTab.tabIndex = -1;
         btnNewTab.className = 'btn-group-action btn-new-tab';
         btnNewTab.innerHTML = '+';
-        btnNewTab.title = '新建会话 (New Session)';
+        btnNewTab.title = '新建会话 (右键或点击右侧 ▾ 打开快捷终端菜单)';
         btnNewTab.addEventListener('click', (e) => {
           e.stopPropagation();
           this.setActiveGroup(gid);
           sendToHost('3', 'new_tab');
+        });
+        btnNewTab.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.setActiveGroup(gid);
+          showNewTabMenu(btnNewTab, gid);
+        });
+
+        const btnNewTabDropdown = document.createElement('button');
+        btnNewTabDropdown.tabIndex = -1;
+        btnNewTabDropdown.className = 'btn-group-action btn-new-tab-dropdown';
+        btnNewTabDropdown.innerHTML = '<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>';
+        btnNewTabDropdown.title = '新建终端选项 (PowerShell / WSL / PuTTY 配置)';
+        btnNewTabDropdown.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.setActiveGroup(gid);
+          showNewTabMenu(btnNewTabDropdown, gid);
         });
 
         const btnOpenEditor = document.createElement('button');
@@ -1259,6 +1593,7 @@
         actionsEl.appendChild(btnOpenEditor);
         actionsEl.appendChild(btnToolbox);
         actionsEl.appendChild(btnNewTab);
+        actionsEl.appendChild(btnNewTabDropdown);
 
         tabBarEl.appendChild(tabsListEl);
         tabBarEl.appendChild(actionsEl);
@@ -1298,6 +1633,17 @@
           btnRecordLog,
           btnAutoReconnect
         };
+
+        if (window.ResizeObserver) {
+          const ro = new ResizeObserver(() => {
+            const g = this.groups[gid];
+            if (g && g.activeSessionId && sessions[g.activeSessionId]) {
+              syncSessionSize(g.activeSessionId, false);
+            }
+          });
+          ro.observe(contentEl);
+          groupObj.resizeObserver = ro;
+        }
 
         this.groups[gid] = groupObj;
         return groupObj;
@@ -1579,7 +1925,7 @@
         this.updateGroupAutoReconnectButton(gid);
 
         setTimeout(() => {
-          syncSessionSize(sid);
+          syncSessionSize(sid, true);
           cur.term.focus();
         }, 25);
       }
@@ -1704,7 +2050,7 @@
             prevChild.style.flex = `${prevRatio * 100} 1 0px`;
             nextChild.style.flex = `${nextRatio * 100} 1 0px`;
 
-            syncAllSizes();
+            syncAllSizes(false);
           }
 
           function onMouseUp() {
@@ -1712,7 +2058,10 @@
             overlay.remove();
             window.removeEventListener('mousemove', onMouseMove);
             window.removeEventListener('mouseup', onMouseUp);
-            syncAllSizes();
+            syncAllSizes(true);
+            if (typeof resizeDebouncer !== 'undefined' && resizeDebouncer.flushAll) {
+              resizeDebouncer.flushAll();
+            }
           }
 
           window.addEventListener('mousemove', onMouseMove);
@@ -1723,6 +2072,13 @@
       checkAndCleanupGroup(gid) {
         const g = this.groups[gid];
         if (!g) return;
+
+        if (g.resizeObserver) {
+          try {
+            g.resizeObserver.disconnect();
+          } catch (e) {}
+          g.resizeObserver = null;
+        }
 
         if (g.sessionIds.length === 0) {
           const splitChild = g.groupEl.parentElement;
@@ -1891,8 +2247,16 @@
         cursorBlink: true,
         cursorStyle: 'block',
         allowProposedApi: true,
+        rescaleOverlappingGlyphs: true, // VS Code 核心特性：自动缩小溢出单元格的 Powerline/Nerd 符号
+        macOptionIsMeta: false,
+        rightClickSelectsWord: false,
         scrollback: sessions[id]?.config?.scrollback || 10000,
         convertEol: initialConvertEol,
+        windowOptions: {
+          getWinSizePixels: true,
+          getCellSizePixels: true,
+          getWinSizeChars: true,
+        },
         linkHandler: {
           allowNonHttpProtocols: true,
           activate: (e, text, range) => {
@@ -1911,6 +2275,18 @@
       const fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
 
+      let unicode11Addon = null;
+      if (window.Unicode11Addon) {
+        try {
+          unicode11Addon = new Unicode11Addon.Unicode11Addon();
+          term.loadAddon(unicode11Addon);
+          term.unicode.activeVersion = '11';
+        } catch (e) {
+          console.warn(`[Session ${id}] Unicode11Addon init failed:`, e);
+          unicode11Addon = null;
+        }
+      }
+
       if (window.WebLinksAddon) {
         term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => {
           hideLinkTooltip();
@@ -1926,6 +2302,53 @@
       }
 
       term.open(viewEl);
+
+      let webglAddon = null;
+      if (window.WebglAddon) {
+        try {
+          webglAddon = new WebglAddon.WebglAddon();
+          webglAddon.onContextLoss((e) => {
+            console.warn(`[Session ${id}] WebGL 上下文丢失，降级至标准渲染器:`, e);
+            if (webglAddon) {
+              webglAddon.dispose();
+              webglAddon = null;
+            }
+          });
+          term.loadAddon(webglAddon);
+          console.log(`[Session ${id}] WebGL 加速渲染器挂载成功`);
+        } catch (err) {
+          console.warn(`[Session ${id}] WebGL 初始化失败 (无可用硬件加速或驱动不支持)，平滑回退至 DOM 渲染器:`, err);
+          webglAddon = null;
+        }
+      }
+
+      let searchAddon = null;
+      if (window.SearchAddon && window.SearchAddon.SearchAddon) {
+        try {
+          searchAddon = new SearchAddon.SearchAddon({
+            highlightLimit: 1000
+          });
+          term.loadAddon(searchAddon);
+          searchAddon.onDidChangeResults(e => {
+            const statusEl = document.getElementById('find-status');
+            if (!statusEl) return;
+            if (activeGlobalSessionId !== id) return;
+            if (!e) {
+              statusEl.textContent = '';
+              return;
+            }
+            if (e.resultCount === 0) {
+              const findInput = document.getElementById('find-input');
+              statusEl.textContent = findInput && findInput.value ? '无结果' : '';
+            } else {
+              statusEl.textContent = `${e.resultIndex + 1} of ${e.resultCount}`;
+            }
+          });
+        } catch (e) {
+          console.warn(`[Session ${id}] SearchAddon init failed:`, e);
+          searchAddon = null;
+        }
+      }
 
       // Ensure terminal gets focused on click; Ctrl+Click opens Multi-line Editor (unless clicking a link)
       viewEl.addEventListener('mousedown', e => {
@@ -1945,12 +2368,15 @@
         }
         term.focus();
         if (e.button === 2) {
-          // When applications enable VT mouse tracking (e.g. Copilot CLI, vim, htop),
-          // xterm.js converts right-clicks into SGR mouse sequences (\x1b[<2;...M).
-          // On Windows, ConPTY interprets that SGR right-click as a QuickEdit paste,
-          // while our contextmenu handler ALSO pastes from the clipboard, resulting in
-          // a duplicate paste. Stopping propagation here prevents xterm.js from reporting it.
-          e.stopPropagation();
+          const isMouseTracking = Boolean(
+            (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none') ||
+            (term._core && term._core.coreMouseService && term._core.coreMouseService.areMouseEventsActive)
+          );
+          if (!isMouseTracking || e.shiftKey) {
+            // Not in tracking mode or Shift held: prevent xterm from processing mouse event so contextmenu handles paste
+            e.stopPropagation();
+          }
+          // In tracking mode without Shift: allow event to propagate to xterm.js for VT SGR mouse sequence generation
         }
       }, true);
 
@@ -1986,11 +2412,17 @@
         }, 10);
       }, true);
 
-      // Quick right-click paste (PuTTY classic behavior)
+      // Quick right-click paste (PuTTY classic behavior: decoupled with Vim mouse tracking)
       viewEl.addEventListener('contextmenu', e => {
         e.preventDefault();
         e.stopPropagation();
-        sendToHost('3', `${id}:paste`);
+        const isMouseTracking = Boolean(
+          (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none') ||
+          (term._core && term._core.coreMouseService && term._core.coreMouseService.areMouseEventsActive)
+        );
+        if (!isMouseTracking || e.shiftKey) {
+          sendToHost('3', `${id}:paste`);
+        }
       }, true);
 
       // Middle-click paste
@@ -2002,29 +2434,90 @@
         }
       }, true);
 
-      // Terminal keyboard shortcuts (Shift+Insert / Ctrl+Shift+V for paste, Ctrl+Shift+C for copy)
+      // Terminal keyboard shortcuts & browser isolation (VS Code-aligned)
       term.attachCustomKeyEventHandler(e => {
+        // Prevent default browser action for F5
+        if (e.key === 'F5') {
+          e.preventDefault();
+          return false;
+        }
+
+        if (e.ctrlKey && !e.altKey && !e.metaKey) {
+          const lowerKey = e.key.toLowerCase();
+
+          // Ctrl+R (History reverse search): prevent browser reload, let xterm send \x12
+          if (lowerKey === 'r' && !e.shiftKey) {
+            e.preventDefault();
+            return true;
+          }
+
+          // Ctrl+P (Previous command in history): prevent browser print dialog, let xterm send \x10
+          if (lowerKey === 'p' && !e.shiftKey) {
+            e.preventDefault();
+            return true;
+          }
+
+          // Ctrl+F (Find): prevent browser search, open find widget
+          if (lowerKey === 'f' && !e.shiftKey) {
+            e.preventDefault();
+            if (e.type === 'keydown') {
+              showFindWidget();
+            }
+            return false;
+          }
+
+          if (e.type === 'keydown') {
+            // Smart Ctrl+C: copy if selection exists, send SIGINT (\x03) if no selection
+            if (lowerKey === 'c' && !e.shiftKey) {
+              if (term.hasSelection()) {
+                const sel = term.getSelection();
+                if (sel) {
+                  sendToHost('4', sel);
+                }
+                term.clearSelection();
+                return false; // Do not send \x03 to remote
+              }
+              return true; // No selection -> let xterm send \x03 (SIGINT)
+            }
+
+            // Ctrl+V: Native terminal paste
+            if (lowerKey === 'v' && !e.shiftKey) {
+              sendToHost('3', `${id}:paste`);
+              return false;
+            }
+
+            // Ctrl+Shift+C: Copy
+            if (lowerKey === 'c' && e.shiftKey) {
+              const sel = term.getSelection();
+              if (sel) {
+                sendToHost('4', sel);
+              }
+              term.clearSelection();
+              return false;
+            }
+
+            // Ctrl+Shift+V: Paste
+            if (lowerKey === 'v' && e.shiftKey) {
+              sendToHost('3', `${id}:paste`);
+              return false;
+            }
+
+            // Ctrl+Shift+W: Close session
+            if (lowerKey === 'w' && e.shiftKey) {
+              requestCloseSession(id);
+              return false;
+            }
+          }
+        }
+
         if (e.type === 'keydown') {
+          // Shift+Insert: Paste
           if (e.shiftKey && e.key === 'Insert') {
             sendToHost('3', `${id}:paste`);
             return false;
           }
-          if (e.ctrlKey && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
-            sendToHost('3', `${id}:paste`);
-            return false;
-          }
-          if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
-            const sel = term.getSelection();
-            if (sel) {
-              sendToHost('4', sel);
-            }
-            return false;
-          }
-          if (e.ctrlKey && e.shiftKey && (e.key === 'W' || e.key === 'w')) {
-            requestCloseSession(id);
-            return false;
-          }
         }
+
         return true;
       });
 
@@ -2130,6 +2623,9 @@
         currentDir: null,
         term,
         fitAddon,
+        webglAddon,
+        unicode11Addon,
+        searchAddon,
         viewEl,
         tabEl,
         titleEl,
@@ -2138,7 +2634,9 @@
         groupId: null,
         isLogging: false,
         logFilename: '',
-        autoReconnect: false
+        autoReconnect: false,
+        pendingAckBytes: 0,
+        ackTimer: null
       };
 
       // OSC 7 Current Working Directory support
@@ -2269,9 +2767,37 @@
       }
 
       // 2. Delete session from dictionary
+      if (cur) {
+        if (cur.ackTimer) {
+          clearTimeout(cur.ackTimer);
+          cur.ackTimer = null;
+        }
+        cur.pendingAckBytes = 0;
+      }
       delete sessions[id];
+      if (typeof resizeDebouncer !== 'undefined' && resizeDebouncer.clear) {
+        resizeDebouncer.clear(id);
+      }
 
       // 3. Dispose terminal instance
+      try {
+        if (cur && cur.webglAddon) {
+          cur.webglAddon.dispose();
+          cur.webglAddon = null;
+        }
+      } catch (e) {}
+      try {
+        if (cur && cur.unicode11Addon) {
+          cur.unicode11Addon.dispose();
+          cur.unicode11Addon = null;
+        }
+      } catch (e) {}
+      try {
+        if (cur && cur.searchAddon) {
+          cur.searchAddon.dispose();
+          cur.searchAddon = null;
+        }
+      } catch (e) {}
       try {
         if (cur && cur.term) {
           cur.term.dispose();
@@ -2325,28 +2851,117 @@
       }
     }
 
-    function syncSessionSize(id) {
+    function syncSessionSize(id, immediate = false) {
       const s = sessions[id];
-      if (!s) return;
+      if (!s || !s.term || !s.fitAddon) return;
       try {
-        s.fitAddon.fit();
-        const dims = { cols: s.term.cols, rows: s.term.rows };
-        sendToHost('1', `${id}:${JSON.stringify(dims)}`);
-      } catch (e) {}
+        const dims = s.fitAddon.proposeDimensions();
+        if (dims && !isNaN(dims.cols) && !isNaN(dims.rows) && dims.cols > 0 && dims.rows > 0) {
+          if (s.term.cols !== dims.cols || s.term.rows !== dims.rows) {
+            if (s.term._core && s.term._core._renderService) {
+              s.term._core._renderService.clear();
+            }
+            s.term.resize(dims.cols, dims.rows);
+          }
+          resizeDebouncer.resize(id, dims.cols, dims.rows, immediate);
+        }
+      } catch (e) {
+        console.warn(`[Session ${id}] syncSessionSize failed:`, e);
+      }
     }
 
-    function syncAllSizes() {
+    function syncAllSizes(immediate = false) {
       for (const gid in dockManager.groups) {
         const g = dockManager.groups[gid];
         if (g.activeSessionId && sessions[g.activeSessionId]) {
-          syncSessionSize(g.activeSessionId);
+          syncSessionSize(g.activeSessionId, immediate);
         }
       }
     }
 
     window.addEventListener('resize', () => {
-      syncAllSizes();
+      syncAllSizes(false);
     });
+
+    window.addEventListener('mouseup', () => {
+      if (typeof resizeDebouncer !== 'undefined' && resizeDebouncer.flushAll) {
+        resizeDebouncer.flushAll();
+      }
+    });
+
+    // Intercept browser default shortcuts at window level
+    window.addEventListener('keydown', e => {
+      if (e.key === 'F5') {
+        e.preventDefault();
+      }
+      if (e.ctrlKey && !e.altKey && !e.metaKey) {
+        const k = e.key.toLowerCase();
+        if (k === 'r' || k === 'p' || k === 'f') {
+          e.preventDefault();
+          if (k === 'f') {
+            showFindWidget();
+          }
+        }
+      }
+    }, false);
+
+    // VS Code-aligned font metrics & layout guard
+    if (document.fonts && document.fonts.ready) {
+      const remeasureAllSessions = () => {
+        for (const sid in sessions) {
+          const s = sessions[sid];
+          if (s && s.term && s.term._core && s.term._core._charSizeService) {
+            try {
+              s.term._core._charSizeService.measure();
+            } catch (e) {}
+          }
+        }
+        syncAllSizes(true);
+      };
+      document.fonts.ready.then(remeasureAllSessions);
+      if (document.fonts.addEventListener) {
+        document.fonts.addEventListener('loadingdone', remeasureAllSessions);
+      }
+    }
+
+    // High-DPI (DPR) multi-monitor dynamic monitoring & recalibration
+    let currentDpr = window.devicePixelRatio || 1;
+    let dprMediaQuery = null;
+
+    function handleDprChange() {
+      for (const sid in sessions) {
+        const s = sessions[sid];
+        if (s && s.term && s.term._core && s.term._core._charSizeService) {
+          try {
+            s.term._core._charSizeService.measure();
+          } catch (e) {}
+        }
+      }
+      syncAllSizes(true);
+      setupDprMonitor();
+    }
+
+    function setupDprMonitor() {
+      if (!window.matchMedia) return;
+      if (dprMediaQuery) {
+        try {
+          dprMediaQuery.removeEventListener('change', handleDprChange);
+        } catch (e) {
+          dprMediaQuery.removeListener(handleDprChange);
+        }
+      }
+      currentDpr = window.devicePixelRatio || 1;
+      dprMediaQuery = window.matchMedia(`screen and (resolution: ${currentDpr}dppx)`);
+      try {
+        dprMediaQuery.addEventListener('change', handleDprChange);
+      } catch (e) {
+        dprMediaQuery.addListener(handleDprChange);
+      }
+    }
+
+    setupDprMonitor();
+    window.setupDprMonitor = setupDprMonitor;
+    window.handleDprChange = handleDprChange;
 
     // Context Menu handling
     function showContextMenu(e, id) {
@@ -2379,7 +2994,24 @@
     document.addEventListener('click', () => {
       contextMenuEl.style.display = 'none';
       hideToolboxMenu();
+      hideNewTabMenu();
     });
+
+    if (newTabMenuEl) {
+      newTabMenuEl.addEventListener('click', e => {
+        const item = e.target.closest('.menu-item');
+        if (!item) return;
+        const action = item.getAttribute('data-action');
+        hideNewTabMenu();
+        if (action === 'new-powershell') {
+          sendToHost('3', 'new_tab_powershell');
+        } else if (action === 'new-wsl') {
+          sendToHost('3', 'new_tab_wsl');
+        } else if (action === 'new') {
+          sendToHost('3', 'new_tab');
+        }
+      });
+    }
 
     if (toolboxMenuEl) {
       toolboxMenuEl.addEventListener('click', e => {
@@ -2387,7 +3019,11 @@
         if (!item) return;
         const action = item.getAttribute('data-action');
         hideToolboxMenu();
-        if (action === 'open-editor') {
+        if (action === 'new-powershell') {
+          sendToHost('3', 'new_tab_powershell');
+        } else if (action === 'new-wsl') {
+          sendToHost('3', 'new_tab_wsl');
+        } else if (action === 'open-editor') {
           const gid = toolboxMenuEl.dataset.gid || dockManager.activeGroupId;
           const sid = (gid && dockManager.groups[gid]) ? dockManager.groups[gid].activeSessionId : activeGlobalSessionId;
           if (sid) {
@@ -2449,6 +3085,10 @@
         }
       } else if (action === 'new') {
         sendToHost('3', 'new_tab');
+      } else if (action === 'new-powershell') {
+        sendToHost('3', 'new_tab_powershell');
+      } else if (action === 'new-wsl') {
+        sendToHost('3', 'new_tab_wsl');
       } else if (action === 'detach') {
         const totalSessions = Object.keys(sessions).length;
         if (totalSessions > 1) {
@@ -2508,9 +3148,14 @@
                 for (let i = 0; i < len; i++) {
                   bytes[i] = binaryString.charCodeAt(i);
                 }
-                s.term.write(bytes);
+                s.term.write(bytes, () => {
+                  ackSessionData(s, id, len);
+                });
               } catch (e) {
-                s.term.write(b64);
+                const len = b64.length;
+                s.term.write(b64, () => {
+                  ackSessionData(s, id, len);
+                });
               }
               if (s.schedulePromptCheck) {
                 s.schedulePromptCheck();
@@ -3193,10 +3838,184 @@
         });
       }
 
-      // Window/Document focus routing: ensure active terminal is focused (guarded by modals)
+      // Terminal Find Widget Controller (VS Code Parity)
+      const terminalFindWidgetEl = document.getElementById('terminal-find-widget');
+      const findInputEl = document.getElementById('find-input');
+      const findStatusEl = document.getElementById('find-status');
+      const findOptCaseBtn = document.getElementById('find-opt-case');
+      const findOptWholeBtn = document.getElementById('find-opt-whole');
+      const findOptRegexBtn = document.getElementById('find-opt-regex');
+      const findBtnPrev = document.getElementById('find-btn-prev');
+      const findBtnNext = document.getElementById('find-btn-next');
+      const findBtnClose = document.getElementById('find-btn-close');
+
+      const findOptions = {
+        caseSensitive: false,
+        wholeWord: false,
+        regex: false
+      };
+
+      function getActiveSession() {
+        if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {
+          return sessions[activeGlobalSessionId];
+        }
+        const keys = Object.keys(sessions);
+        if (keys.length > 0) return sessions[keys[0]];
+        return null;
+      }
+
+      function showFindWidget() {
+        if (!terminalFindWidgetEl) return;
+        terminalFindWidgetEl.classList.remove('hidden');
+        terminalFindWidgetEl.style.display = 'flex';
+
+        const s = getActiveSession();
+        if (s && s.term && s.term.hasSelection()) {
+          const sel = s.term.getSelection();
+          if (sel && !sel.includes('\n') && !sel.includes('\r')) {
+            findInputEl.value = sel;
+          }
+        }
+        if (findInputEl) {
+          findInputEl.focus();
+          findInputEl.select();
+          if (findInputEl.value) {
+            performFind(false, false);
+          }
+        }
+      }
+      window.showFindWidget = showFindWidget;
+
+      function hideFindWidget() {
+        if (!terminalFindWidgetEl) return;
+        terminalFindWidgetEl.classList.add('hidden');
+        terminalFindWidgetEl.style.display = 'none';
+
+        const s = getActiveSession();
+        if (s && s.searchAddon) {
+          s.searchAddon.clearDecorations();
+        }
+        if (s && s.term) {
+          s.term.focus();
+        }
+      }
+      window.hideFindWidget = hideFindWidget;
+
+      function toggleFindOption(type) {
+        if (type === 'case') {
+          findOptions.caseSensitive = !findOptions.caseSensitive;
+          if (findOptCaseBtn) findOptCaseBtn.classList.toggle('active', findOptions.caseSensitive);
+        } else if (type === 'whole') {
+          findOptions.wholeWord = !findOptions.wholeWord;
+          if (findOptWholeBtn) findOptWholeBtn.classList.toggle('active', findOptions.wholeWord);
+        } else if (type === 'regex') {
+          findOptions.regex = !findOptions.regex;
+          if (findOptRegexBtn) findOptRegexBtn.classList.toggle('active', findOptions.regex);
+        }
+        performFind(false, false);
+      }
+      window.toggleFindOption = toggleFindOption;
+
+      function performFind(previous = false, incremental = false) {
+        const s = getActiveSession();
+        if (!findInputEl) return false;
+        const text = findInputEl.value;
+
+        if (!s || !s.searchAddon) {
+          if (findStatusEl) findStatusEl.textContent = '';
+          return false;
+        }
+
+        if (!text) {
+          s.searchAddon.clearDecorations();
+          if (findStatusEl) findStatusEl.textContent = '';
+          return false;
+        }
+
+        const opts = {
+          caseSensitive: findOptions.caseSensitive,
+          wholeWord: findOptions.wholeWord,
+          regex: findOptions.regex,
+          incremental: incremental,
+          decorations: {
+            matchBackground: 'rgba(255, 255, 255, 0.18)',
+            matchBorder: 'rgba(255, 255, 255, 0.35)',
+            activeMatchBackground: '#515c6a',
+            activeMatchBorder: '#f14c4c',
+            matchOverviewRuler: 'rgba(255, 255, 255, 0.35)',
+            activeMatchColorOverviewRuler: '#f14c4c'
+          }
+        };
+
+        let found = false;
+        try {
+          if (previous) {
+            found = s.searchAddon.findPrevious(text, opts);
+          } else {
+            found = s.searchAddon.findNext(text, opts);
+          }
+        } catch (err) {
+          if (findStatusEl) findStatusEl.textContent = '无效表达式';
+          return false;
+        }
+
+        if (!found && findStatusEl) {
+          findStatusEl.textContent = '无结果';
+        }
+        return found;
+      }
+      window.performFind = performFind;
+
+      function initFindWidget() {
+        if (!terminalFindWidgetEl) return;
+
+        // Strict event isolation: prevent keys inside find widget from leaking to xterm/shell
+        terminalFindWidgetEl.addEventListener('keydown', e => {
+          e.stopPropagation();
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            hideFindWidget();
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            performFind(e.shiftKey, false);
+          } else if (e.altKey && !e.ctrlKey && !e.metaKey) {
+            const k = e.key.toLowerCase();
+            if (k === 'c') {
+              e.preventDefault();
+              toggleFindOption('case');
+            } else if (k === 'w') {
+              e.preventDefault();
+              toggleFindOption('whole');
+            } else if (k === 'r') {
+              e.preventDefault();
+              toggleFindOption('regex');
+            }
+          }
+        });
+        terminalFindWidgetEl.addEventListener('keypress', e => e.stopPropagation());
+        terminalFindWidgetEl.addEventListener('keyup', e => e.stopPropagation());
+
+        if (findInputEl) {
+          findInputEl.addEventListener('input', () => {
+            performFind(false, true);
+          });
+        }
+
+        if (findBtnPrev) findBtnPrev.addEventListener('click', () => performFind(true, false));
+        if (findBtnNext) findBtnNext.addEventListener('click', () => performFind(false, false));
+        if (findBtnClose) findBtnClose.addEventListener('click', () => hideFindWidget());
+
+        if (findOptCaseBtn) findOptCaseBtn.addEventListener('click', () => toggleFindOption('case'));
+        if (findOptWholeBtn) findOptWholeBtn.addEventListener('click', () => toggleFindOption('whole'));
+        if (findOptRegexBtn) findOptRegexBtn.addEventListener('click', () => toggleFindOption('regex'));
+      }
+      initFindWidget();
+
+      // Window/Document focus routing: ensure active terminal is focused (guarded by modals & find widget)
       window.addEventListener('focus', () => {
         if ((mleModalEl && mleModalEl.style.display !== 'none') ||
-            (sshAuthModalEl && sshAuthModalEl.style.display !== 'none')) {
+            (sshAuthModalEl && sshAuthModalEl.style.display !== 'none') ||
+            (terminalFindWidgetEl && !terminalFindWidgetEl.classList.contains('hidden'))) {
           return;
         }
         if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {
@@ -3206,7 +4025,8 @@
 
       document.addEventListener('keydown', (e) => {
         if ((mleModalEl && mleModalEl.style.display !== 'none') ||
-            (sshAuthModalEl && sshAuthModalEl.style.display !== 'none')) {
+            (sshAuthModalEl && sshAuthModalEl.style.display !== 'none') ||
+            (terminalFindWidgetEl && !terminalFindWidgetEl.classList.contains('hidden'))) {
           return;
         }
         if (activeGlobalSessionId && sessions[activeGlobalSessionId]) {

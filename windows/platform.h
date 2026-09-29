@@ -820,6 +820,7 @@ bool cliloop_null_pre(void *vctx, const HANDLE **, size_t *);
 bool cliloop_null_post(void *vctx, size_t);
 
 extern const struct BackendVtable conpty_backend;
+extern const struct BackendVtable powershell_backend;
 
 /* Functions that parametrise window.c between PuTTY and pterm */
 void gui_term_process_cmdline(Conf *conf, char *cmdline);

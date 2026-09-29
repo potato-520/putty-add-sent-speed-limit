@@ -157,6 +157,9 @@ static void mem_log_dump_to_strbuf(strbuf *sb)
 #define IDR_WEB_FIT_ADDON_JS        2004
 #define IDR_WEB_WEBLINKS_ADDON_JS   2005
 #define IDR_WEB_EDITOR_HTML         2006
+#define IDR_WEB_WEBGL_ADDON_JS      2007
+#define IDR_WEB_UNICODE11_ADDON_JS  2008
+#define IDR_WEB_SEARCH_ADDON_JS     2009
 
 struct EmbeddedAsset {
     const wchar_t *filename;
@@ -169,6 +172,9 @@ static const struct EmbeddedAsset embedded_assets[] = {
     { L"xterm.css", IDR_WEB_XTERM_CSS },
     { L"xterm-addon-fit.js", IDR_WEB_FIT_ADDON_JS },
     { L"xterm-addon-web-links.js", IDR_WEB_WEBLINKS_ADDON_JS },
+    { L"xterm-addon-webgl.js", IDR_WEB_WEBGL_ADDON_JS },
+    { L"xterm-addon-unicode11.js", IDR_WEB_UNICODE11_ADDON_JS },
+    { L"xterm-addon-search.js", IDR_WEB_SEARCH_ADDON_JS },
     { L"editor.html", IDR_WEB_EDITOR_HTML },
 };
 #define NUM_EMBEDDED_ASSETS (sizeof(embedded_assets) / sizeof(embedded_assets[0]))
@@ -428,6 +434,7 @@ typedef struct WebViewSession {
     int localecho;
     int localedit;
     char last_out_char;
+    size_t unack_bytes;          /* 未被前端确认消费的待渲染字节数 */
 
     /* SSH Interactive prompt state & password vault context */
     prompts_t *cur_prompts;
@@ -682,6 +689,7 @@ static bool session_start_log(WebViewSession *sess)
     if (proto == PROT_SSH) type_name = "SSH";
     else if (proto == PROT_SERIAL) type_name = "Serial";
     else if (proto == PROT_CONPTY) type_name = "WSL";
+    else if (proto == PROT_POWERSHELL) type_name = "PowerShell";
     else if (proto == PROT_TELNET) type_name = "Telnet";
     else if (proto == PROT_RAW) type_name = "Raw";
 
@@ -1694,6 +1702,7 @@ static void session_handle_disconnect(WebViewSession *sess, const char *reason)
 
     bool was_connected = sess->is_connected;
     sess->is_connected = false;
+    sess->unack_bytes = 0;
 
     if (sess->log_fp) {
         fclose(sess->log_fp);
@@ -1804,7 +1813,7 @@ static void session_reconnect(WebViewSession *sess)
     } else {
         sess->is_connected = true;
         sess->wgs.backend = sess->backend;
-        if (proto == PROT_SERIAL || proto == PROT_CONPTY || proto == PROT_RAW) {
+        if (proto == PROT_SERIAL || proto == PROT_CONPTY || proto == PROT_RAW || proto == PROT_POWERSHELL) {
             if (sess->auto_reconnect) {
                 session_write_terminal(sess, "\x1b[1;32m[自动重连成功]\x1b[0m\r\n");
             }
@@ -1852,8 +1861,13 @@ static void session_toggle_auto_reconnect(WebViewSession *sess)
 static size_t webview_seat_output(Seat *seat, SeatOutputType type,
                                  const void *data, size_t len)
 {
+    size_t cur_backlog = 0;
     if (len > 0) {
         WebViewSession *sess = session_from_seat(seat);
+        if (sess) {
+            sess->unack_bytes += len;
+            cur_backlog = sess->unack_bytes;
+        }
         if (sess && data) {
             if (strstr((const char *)data, "Access denied") ||
                 strstr((const char *)data, "Authentication failed") ||
@@ -1924,6 +1938,7 @@ static size_t webview_seat_output(Seat *seat, SeatOutputType type,
         if (heap_buf) {
             sfree(heap_buf);
         }
+        return cur_backlog;
     }
     return 0;
 }
@@ -3729,8 +3744,15 @@ static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const
         strncpy(sess->name, suggested_title, sizeof(sess->name) - 1);
     } else {
         char *host = conf_get_str(sess->cfg, CONF_host);
-        if (proto == PROT_CONPTY) {
-            if (host && *host) {
+        if (proto == PROT_POWERSHELL) {
+            strncpy(sess->name, "PowerShell", sizeof(sess->name) - 1);
+        } else if (proto == PROT_CONPTY) {
+            const char *rcmd = conf_get_str_ambi(sess->cfg, CONF_remote_cmd, NULL);
+            if (rcmd && (strstr(rcmd, "powershell") || strstr(rcmd, "pwsh"))) {
+                strncpy(sess->name, "PowerShell", sizeof(sess->name) - 1);
+            } else if (host && (!stricmp(host, "powershell") || !stricmp(host, "pwsh") || !stricmp(host, "ps"))) {
+                strncpy(sess->name, "PowerShell", sizeof(sess->name) - 1);
+            } else if (host && *host && stricmp(host, "wsl") != 0 && stricmp(host, "localhost") != 0) {
                 snprintf(sess->name, sizeof(sess->name), "WSL (%s)", host);
             } else {
                 strncpy(sess->name, "WSL", sizeof(sess->name) - 1);
@@ -3797,6 +3819,9 @@ static WebViewSession *session_create(HWND target_hwnd, Conf *conf_to_use, const
     } else {
         sess->is_connected = true;
         sess->wgs.backend = sess->backend;
+        if (target_hwnd && (proto == PROT_CONPTY || proto == PROT_POWERSHELL || proto == PROT_SERIAL || proto == PROT_RAW)) {
+            webview_host_send_session_text_to_window(target_hwnd, '2', sess->id, "connected");
+        }
     }
 
     return sess;
@@ -3819,6 +3844,7 @@ static void session_close(int id)
 
     if (target) {
         dbg_log("session_close: closing session %d (hwnd=%p, auto_reconnect=%d)", id, (void*)target->hwnd, target->auto_reconnect);
+        target->unack_bytes = 0;
         target->auto_reconnect = false;
         target->reconnect_timer_active = false;
         expire_timer_context(&target->reconnect_timer_active);
@@ -4028,8 +4054,56 @@ static void session_new_via_dialog(HWND target_hwnd)
     Conf *new_cfg = conf_new();
     do_defaults(NULL, new_cfg);
     if (do_config(new_cfg)) {
+        int cur_proto = conf_get_int(new_cfg, CONF_protocol);
+        const char *cur_h = conf_get_str(new_cfg, CONF_host);
+        if (cur_proto == PROT_POWERSHELL) {
+            if (!cur_h || !*cur_h || !stricmp(cur_h, "powershell") ||
+                !stricmp(cur_h, "pwsh") || !stricmp(cur_h, "ps") ||
+                !stricmp(cur_h, "PowerShell") || !stricmp(cur_h, "local") ||
+                !stricmp(cur_h, "localhost")) {
+                conf_set_str(new_cfg, CONF_host, "PowerShell");
+                conf_set_str(new_cfg, CONF_remote_cmd, "powershell.exe -NoLogo");
+            } else {
+                char cmd[512];
+                snprintf(cmd, sizeof(cmd), "powershell.exe -NoLogo %s", cur_h);
+                conf_set_str(new_cfg, CONF_remote_cmd, cmd);
+            }
+        } else if (cur_proto == PROT_CONPTY) {
+            if (!cur_h || !*cur_h || !stricmp(cur_h, "wsl") ||
+                !stricmp(cur_h, "WSL") || !stricmp(cur_h, "localhost") ||
+                !stricmp(cur_h, "127.0.0.1")) {
+                conf_set_str(new_cfg, CONF_host, "WSL");
+                conf_set_str(new_cfg, CONF_remote_cmd, "wsl.exe ~");
+            } else {
+                char cmd[512];
+                snprintf(cmd, sizeof(cmd), "wsl.exe -d %s ~", cur_h);
+                conf_set_str(new_cfg, CONF_remote_cmd, cmd);
+            }
+        }
         session_create(target_hwnd, new_cfg, NULL);
     }
+    conf_free(new_cfg);
+}
+
+static void session_new_powershell(HWND target_hwnd)
+{
+    Conf *new_cfg = conf_new();
+    do_defaults(NULL, new_cfg);
+    conf_set_int(new_cfg, CONF_protocol, PROT_POWERSHELL);
+    conf_set_str(new_cfg, CONF_host, "PowerShell");
+    conf_set_str(new_cfg, CONF_remote_cmd, "powershell.exe -NoLogo");
+    session_create(target_hwnd, new_cfg, "PowerShell");
+    conf_free(new_cfg);
+}
+
+static void session_new_wsl(HWND target_hwnd)
+{
+    Conf *new_cfg = conf_new();
+    do_defaults(NULL, new_cfg);
+    conf_set_int(new_cfg, CONF_protocol, PROT_CONPTY);
+    conf_set_str(new_cfg, CONF_host, "WSL");
+    conf_set_str(new_cfg, CONF_remote_cmd, "wsl.exe ~");
+    session_create(target_hwnd, new_cfg, "WSL");
     conf_free(new_cfg);
 }
 
@@ -4187,6 +4261,10 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
         dbg_log("handle_webview_message type 3: hwnd=%p payload='%s'", (void*)hwnd, payload);
         if (!strcmp(payload, "new_tab")) {
             session_new_via_dialog(hwnd);
+        } else if (!strcmp(payload, "new_tab_powershell")) {
+            session_new_powershell(hwnd);
+        } else if (!strcmp(payload, "new_tab_wsl")) {
+            session_new_wsl(hwnd);
         } else if (!strcmp(payload, "strip_log_ansi")) {
             strip_log_ansi_via_dialog(hwnd);
         } else if (!strcmp(payload, "fix_ssh_key_perm")) {
@@ -4349,6 +4427,25 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
                 }
             }
         }
+    } else if (type == 'K') {
+        /* ACK Ring Flow Control: K{id}:{acked_bytes} */
+        const char *colon = strchr(payload, ':');
+        if (colon) {
+            int sess_id = atoi(payload);
+            size_t acked = (size_t)atoll(colon + 1);
+            WebViewSession *sess = session_find(sess_id);
+            if (sess && acked > 0) {
+                if (sess->unack_bytes >= acked) {
+                    sess->unack_bytes -= acked;
+                } else {
+                    sess->unack_bytes = 0;
+                }
+                /* 当积压释放时，通知 PuTTY 后端解除挂起状态 */
+                if (sess->backend && backend_connected(sess->backend)) {
+                    backend_unthrottle(sess->backend, sess->unack_bytes);
+                }
+            }
+        }
     }
 }
 
@@ -4498,7 +4595,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         while (arglist->args[arglistpos]) {
             CmdlineArg *arg = arglist->args[arglistpos++];
             const char *argstr = cmdline_arg_to_str(arg);
-            if (!strcmp(argstr, "-wsl")) {
+            if (!strcmp(argstr, "-powershell") || !strcmp(argstr, "-ps") || !strcmp(argstr, "-pwsh")) {
+                is_conpty = true;
+                snprintf(conpty_cmd, sizeof(conpty_cmd), "powershell.exe -NoLogo");
+                conf_set_int(cfg, CONF_protocol, PROT_POWERSHELL);
+                conf_set_str(cfg, CONF_host, "PowerShell");
+                conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
+                continue;
+            } else if (!strcmp(argstr, "-wsl")) {
                 is_conpty = true;
                 CmdlineArg *nextarg = arglist->args[arglistpos];
                 if (nextarg && !strcmp(cmdline_arg_to_str(nextarg), "-d")) {
@@ -4542,10 +4646,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     cmdline_run_saved(cfg);
 
-    /* Check if host is wsl or local */
+    /* Check if host is powershell, wsl, or local */
     const char *cur_h = conf_get_str(cfg, CONF_host);
     if (!is_conpty && cur_h && *cur_h) {
-        if (!stricmp(cur_h, "wsl")) {
+        if (!stricmp(cur_h, "powershell") || !stricmp(cur_h, "pwsh") || !stricmp(cur_h, "ps")) {
+            is_conpty = true;
+            snprintf(conpty_cmd, sizeof(conpty_cmd), "powershell.exe -NoLogo");
+            conf_set_int(cfg, CONF_protocol, PROT_POWERSHELL);
+            conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
+            conf_set_str(cfg, CONF_host, "PowerShell");
+        } else if (!stricmp(cur_h, "wsl")) {
             is_conpty = true;
             snprintf(conpty_cmd, sizeof(conpty_cmd), "wsl.exe ~");
             conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
@@ -4573,8 +4683,50 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         dbg_log("do_config() accepted. host: '%s'", conf_get_str(cfg, CONF_host));
 
         cur_h = conf_get_str(cfg, CONF_host);
-        if (cur_h && *cur_h) {
-            if (!stricmp(cur_h, "wsl")) {
+        int cur_proto = conf_get_int(cfg, CONF_protocol);
+
+        /* Check protocol set via Config dialog dropdown first */
+        if (cur_proto == PROT_POWERSHELL) {
+            is_conpty = true;
+            if (!conpty_cmd[0]) {
+                /* Use host as extra args if it's not a placeholder name */
+                if (cur_h && *cur_h &&
+                    stricmp(cur_h, "powershell") && stricmp(cur_h, "pwsh") &&
+                    stricmp(cur_h, "ps") && stricmp(cur_h, "PowerShell") &&
+                    stricmp(cur_h, "local") && stricmp(cur_h, "localhost")) {
+                    snprintf(conpty_cmd, sizeof(conpty_cmd),
+                             "powershell.exe -NoLogo %s", cur_h);
+                } else {
+                    snprintf(conpty_cmd, sizeof(conpty_cmd), "powershell.exe -NoLogo");
+                }
+            }
+            conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
+            if (!cur_h || !*cur_h) {
+                conf_set_str(cfg, CONF_host, "PowerShell");
+            }
+        } else if (cur_proto == PROT_CONPTY) {
+            is_conpty = true;
+            if (!conpty_cmd[0]) {
+                if (cur_h && *cur_h &&
+                    stricmp(cur_h, "wsl") && stricmp(cur_h, "WSL") &&
+                    stricmp(cur_h, "localhost") && stricmp(cur_h, "127.0.0.1")) {
+                    snprintf(conpty_cmd, sizeof(conpty_cmd), "wsl.exe -d %s ~", cur_h);
+                } else {
+                    snprintf(conpty_cmd, sizeof(conpty_cmd), "wsl.exe ~");
+                }
+            }
+            conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
+            if (!cur_h || !*cur_h) {
+                conf_set_str(cfg, CONF_host, "WSL");
+            }
+        } else if (cur_h && *cur_h) {
+            if (!stricmp(cur_h, "powershell") || !stricmp(cur_h, "pwsh") || !stricmp(cur_h, "ps")) {
+                is_conpty = true;
+                snprintf(conpty_cmd, sizeof(conpty_cmd), "powershell.exe -NoLogo");
+                conf_set_int(cfg, CONF_protocol, PROT_POWERSHELL);
+                conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
+                conf_set_str(cfg, CONF_host, "PowerShell");
+            } else if (!stricmp(cur_h, "wsl")) {
                 is_conpty = true;
                 snprintf(conpty_cmd, sizeof(conpty_cmd), "wsl.exe ~");
                 conf_set_str(cfg, CONF_remote_cmd, conpty_cmd);
@@ -4591,7 +4743,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     }
 
     if (is_conpty) {
-        conf_set_int(cfg, CONF_protocol, PROT_CONPTY);
+        if (conf_get_int(cfg, CONF_protocol) != PROT_POWERSHELL)
+            conf_set_int(cfg, CONF_protocol, PROT_CONPTY);
     } else {
         prepare_session(cfg);
         dbg_log("prepare_session done. host: '%s', port: %d",
@@ -4627,10 +4780,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     char title[128];
     const char *h = conf_get_str(cfg, CONF_host);
     int proto = conf_get_int(cfg, CONF_protocol);
-    if (proto == PROT_CONPTY) {
+    if (proto == PROT_CONPTY || proto == PROT_POWERSHELL) {
         is_conpty = true;
         if (!conpty_cmd[0]) {
-            if (h && *h && stricmp(h, "wsl") && stricmp(h, "localhost") && stricmp(h, "127.0.0.1")) {
+            if (proto == PROT_POWERSHELL) {
+                snprintf(conpty_cmd, sizeof(conpty_cmd), "powershell.exe -NoLogo");
+            } else if (h && *h && stricmp(h, "wsl") && stricmp(h, "localhost") && stricmp(h, "127.0.0.1")) {
                 snprintf(conpty_cmd, sizeof(conpty_cmd), "wsl.exe -d %s ~", h);
             } else {
                 snprintf(conpty_cmd, sizeof(conpty_cmd), "wsl.exe ~");

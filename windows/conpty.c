@@ -254,10 +254,23 @@ static char *conpty_init(const BackendVtable *vt, Seat *seat,
         const char *conf_cmd = conf_get_str_ambi(conf, CONF_remote_cmd, &utf8);
         if (*conf_cmd) {
             command = dup_mb_to_wc(utf8 ? CP_UTF8 : CP_ACP, conf_cmd);
+        } else if (conf_get_int(conf, CONF_protocol) == PROT_POWERSHELL) {
+            const char *h = conf_get_str(conf, CONF_host);
+            char *cmd;
+            if (h && *h && stricmp(h, "powershell") && stricmp(h, "pwsh") &&
+                stricmp(h, "local") && stricmp(h, "localhost") && stricmp(h, "127.0.0.1")) {
+                cmd = dupprintf("powershell.exe -NoLogo %s", h);
+            } else {
+                cmd = dupstr("powershell.exe -NoLogo");
+            }
+            command = dup_mb_to_wc(CP_ACP, cmd);
+            sfree(cmd);
         } else {
             const char *h = conf_get_str(conf, CONF_host);
             char *cmd;
-            if (h && *h && stricmp(h, "wsl") && stricmp(h, "localhost") && stricmp(h, "127.0.0.1")) {
+            if (h && (!stricmp(h, "powershell") || !stricmp(h, "pwsh"))) {
+                cmd = dupstr("powershell.exe -NoLogo");
+            } else if (h && *h && stricmp(h, "wsl") && stricmp(h, "localhost") && stricmp(h, "127.0.0.1")) {
                 cmd = dupprintf("wsl.exe -d %s ~", h);
             } else {
                 cmd = dupstr("wsl.exe ~");
@@ -266,9 +279,19 @@ static char *conpty_init(const BackendVtable *vt, Seat *seat,
             sfree(cmd);
         }
     }
+    const wchar_t *workdir = NULL;
+    int cur_proto = conf_get_int(conf, CONF_protocol);
+    const char *cur_cmd = conf_get_str_ambi(conf, CONF_remote_cmd, NULL);
+    const char *cur_host = conf_get_str(conf, CONF_host);
+    if (cur_proto == PROT_POWERSHELL ||
+        (cur_cmd && (strstr(cur_cmd, "powershell") || strstr(cur_cmd, "pwsh"))) ||
+        (cur_host && (!stricmp(cur_host, "powershell") || !stricmp(cur_host, "pwsh") || !stricmp(cur_host, "ps")))) {
+        workdir = L"C:\\";
+    }
+
     bool created_ok = CreateProcessW(NULL, command, NULL, NULL,
                                      false, EXTENDED_STARTUPINFO_PRESENT,
-                                     NULL, NULL, &si.StartupInfo, &pi);
+                                     NULL, workdir, &si.StartupInfo, &pi);
     sfree(command);
     if (!created_ok) {
         err = dupprintf("CreateProcess: %s",
@@ -451,5 +474,28 @@ const BackendVtable conpty_backend = {
     .displayname_tc = "WSL",
     .displayname_lc = "wsl",
     .protocol = PROT_CONPTY,
+    .default_port = 0,
+};
+
+const BackendVtable powershell_backend = {
+    .init = conpty_init,
+    .free = conpty_free,
+    .reconfig = conpty_reconfig,
+    .send = conpty_send,
+    .sendbuffer = conpty_sendbuffer,
+    .size = conpty_size,
+    .special = conpty_special,
+    .get_specials = conpty_get_specials,
+    .connected = conpty_connected,
+    .exitcode = conpty_exitcode,
+    .sendok = conpty_sendok,
+    .ldisc_option_state = conpty_ldisc,
+    .provide_ldisc = conpty_provide_ldisc,
+    .unthrottle = conpty_unthrottle,
+    .cfg_info = conpty_cfg_info,
+    .id = "powershell",
+    .displayname_tc = "PowerShell",
+    .displayname_lc = "powershell",
+    .protocol = PROT_POWERSHELL,
     .default_port = 0,
 };

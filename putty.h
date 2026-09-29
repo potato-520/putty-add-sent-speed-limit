@@ -447,7 +447,9 @@ enum {
     PROT_SUPDUP,
     /* PROT_CONPTY is the Windows Pseudo Console (WSL / local) protocol. */
     PROT_CONPTY,
-    PROTOCOL_LIMIT, /* upper bound on number of protocols */
+    /* PROT_POWERSHELL is local Windows PowerShell via ConPTY. */
+    PROT_POWERSHELL,
+    PROTOCOL_LIMIT = 32, /* upper bound on number of protocols */
 };
 
 enum {
