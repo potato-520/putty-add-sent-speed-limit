@@ -1611,7 +1611,7 @@
       if (!linkTooltipEl) return;
       let displayUri = uri;
       let hint = '点击或 Ctrl+单击 打开链接 (Click or Ctrl+Click to open)';
-      if (uri.startsWith('file://') || uri.startsWith('/mnt/') || uri.startsWith('vscode://')) {
+      if (uri.startsWith('file://') || uri.startsWith('/mnt/') || uri.startsWith('vscode://') || /^[a-zA-Z]:[\\\/]/.test(uri) || uri.startsWith('\\\\wsl')) {
         hint = '点击或 Ctrl+单击 在 VS Code / 默认编辑器中定位打开';
       }
       linkTooltipEl.innerHTML = `<div class="link-url">${escapeHtml(displayUri)}</div><div class="link-hint">${hint}</div>`;
@@ -1641,6 +1641,98 @@
       if (linkTooltipEl) {
         linkTooltipEl.style.display = 'none';
       }
+    }
+
+    // Custom File Path & agy URI Link Provider for Terminal
+    function registerFilePathLinkProvider(t, sessId) {
+      if (!t || typeof t.registerLinkProvider !== 'function') return;
+
+      // Regex matches:
+      // 1. Markdown link: [text](file:///... or C:\...)
+      // 2. file:///... links (e.g. agy logs, file:///C:/path/to/file#L10)
+      // 3. Windows local paths: C:\dir\file.ext (optional :line[:col])
+      // 4. WSL/UNC paths: \\wsl.localhost\... or /mnt/c/...
+      const pathRegex = /(?:\[([^\]]+)\]\((file:\/\/\/[^\)\s]+|[a-zA-Z]:[^\)\s]+)\))|(file:\/\/\/(?:[a-zA-Z]:|[^\s"'`<>]+)[^\s"'`<>]*)|((?:(?<![a-zA-Z0-9])(?:[a-zA-Z]:[\\\/](?![\\\/]))|\\\\wsl(?:\.localhost|\$)?\\|\/mnt\/[a-zA-Z]\/)[^\s"'`<>(){}]+)/g;
+
+      function mapCharToCellX(bLine, charIdx) {
+        if (!bLine) return charIdx + 1;
+        let count = 0;
+        for (let x = 0; x < bLine.length; x++) {
+          if (count >= charIdx) return x + 1;
+          const cell = bLine.getCell(x);
+          if (!cell) break;
+          const w = cell.getWidth();
+          if (w === 0) continue; // Trailing half of wide char
+          const chars = cell.getChars();
+          count += (chars ? chars.length : 1);
+        }
+        return bLine.length + 1;
+      }
+
+      t.registerLinkProvider({
+        provideLinks(bufferLineNumber, callback) {
+          const bLine = t.buffer.active.getLine(bufferLineNumber - 1);
+          if (!bLine) {
+            callback(undefined);
+            return;
+          }
+          const lineStr = bLine.translateToString(true);
+          if (!lineStr || lineStr.length < 3) {
+            callback(undefined);
+            return;
+          }
+
+          const links = [];
+          const rx = new RegExp(pathRegex.source, 'g');
+          let match;
+
+          while ((match = rx.exec(lineStr)) !== null) {
+            let fullMatch = match[0];
+            let targetUri = fullMatch;
+            let matchIdx = match.index;
+            let matchLen = fullMatch.length;
+
+            if (match[1] && match[2]) {
+              targetUri = match[2];
+            }
+
+            // Trim trailing punctuation unless part of valid line number
+            const trailingPunct = /[,.;:!?）\)]+$/;
+            const pMatch = fullMatch.match(trailingPunct);
+            if (pMatch && !targetUri.endsWith('#') && !/:\d+$/.test(targetUri)) {
+              const trimLen = pMatch[0].length;
+              fullMatch = fullMatch.slice(0, -trimLen);
+              targetUri = targetUri.slice(0, -trimLen);
+              matchLen -= trimLen;
+            }
+
+            if (matchLen <= 3) continue;
+
+            const startX = mapCharToCellX(bLine, matchIdx);
+            const endX = mapCharToCellX(bLine, matchIdx + matchLen);
+
+            links.push({
+              range: {
+                start: { x: startX, y: bufferLineNumber },
+                end: { x: endX, y: bufferLineNumber }
+              },
+              text: targetUri,
+              activate: (e, text) => {
+                hideLinkTooltip();
+                sendToHost('5', `${sessId}:${text}`);
+              },
+              hover: (e, text) => {
+                showLinkTooltip(e, text);
+              },
+              leave: (e, text) => {
+                hideLinkTooltip();
+              }
+            });
+          }
+
+          callback(links.length > 0 ? links : undefined);
+        }
+      });
     }
 
     const sessions = {}; // id -> { id, title, term, fitAddon, viewEl, tabEl, titleEl, dotEl, connected, groupId }
@@ -2538,6 +2630,10 @@
             hideLinkTooltip();
           }
         }));
+      }
+
+      if (typeof registerFilePathLinkProvider === 'function') {
+        registerFilePathLinkProvider(term, id);
       }
 
       term.open(viewEl);
