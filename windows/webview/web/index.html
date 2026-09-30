@@ -1649,10 +1649,11 @@
 
       // Regex matches:
       // 1. Markdown link: [text](file:///... or C:\...)
-      // 2. file:///... links (e.g. agy logs, file:///C:/path/to/file#L10)
-      // 3. Windows local paths: C:\dir\file.ext (optional :line[:col])
-      // 4. WSL/UNC paths: \\wsl.localhost\... or /mnt/c/...
-      const pathRegex = /(?:\[([^\]]+)\]\((file:\/\/\/[^\)\s]+|[a-zA-Z]:[^\)\s]+)\))|(file:\/\/\/(?:[a-zA-Z]:|[^\s"'`<>]+)[^\s"'`<>]*)|((?:(?<![a-zA-Z0-9])(?:[a-zA-Z]:[\\\/](?![\\\/]))|\\\\wsl(?:\.localhost|\$)?\\|\/mnt\/[a-zA-Z]\/)[^\s"'`<>(){}]+)/g;
+      // 2. Quoted paths: "C:\path with spaces\file.ext" or 'C:\path\file.ext'
+      // 3. file:///... links (e.g. agy logs, file:///C:/path/to/file#L10)
+      // 4. Windows local paths: C:\dir\file.ext (optional :line[:col])
+      // 5. WSL/UNC paths: \\wsl.localhost\... or /mnt/c/...
+      const pathRegex = /(?:\[([^\]]+)\]\(((?:file:\/\/\/|[a-zA-Z]:).+?)\)(?=[^\w/]|$|\s))|["']((?:file:\/\/\/|[a-zA-Z]:[\\\/]|\\\\wsl(?:\.localhost|\$)?\\|\/mnt\/[a-zA-Z]\/)[^"'<>]+)["']|(file:\/\/\/(?:[a-zA-Z]:|[^\s"'`<>]+)[^\s"'`<>]*)|((?:(?<![a-zA-Z0-9])(?:[a-zA-Z]:[\\\/](?![\\\/]))|\\\\wsl(?:\.localhost|\$)?\\|\/mnt\/[a-zA-Z]\/)[^\s"'`<>{}]+)/g;
 
       function mapCharToCellX(bLine, charIdx) {
         if (!bLine) return charIdx + 1;
@@ -1693,17 +1694,51 @@
             let matchLen = fullMatch.length;
 
             if (match[1] && match[2]) {
+              // Markdown link [title](url) -> extract targetUri
               targetUri = match[2];
+            } else if (match[3]) {
+              // Quoted path "C:\..." -> extract path without quotes
+              targetUri = match[3];
             }
 
-            // Trim trailing punctuation unless part of valid line number
-            const trailingPunct = /[,.;:!?）\)]+$/;
-            const pMatch = fullMatch.match(trailingPunct);
+            // 1. Trim trailing punctuation unless part of valid line number
+            const trailingPunct = /[,;:!?]+$/;
+            const pMatch = targetUri.match(trailingPunct);
             if (pMatch && !targetUri.endsWith('#') && !/:\d+$/.test(targetUri)) {
               const trimLen = pMatch[0].length;
               fullMatch = fullMatch.slice(0, -trimLen);
               targetUri = targetUri.slice(0, -trimLen);
               matchLen -= trimLen;
+            }
+
+            // 2. Trim trailing single dot (e.g. at sentence end)
+            if (targetUri.endsWith('.') && !targetUri.endsWith('..')) {
+              fullMatch = fullMatch.slice(0, -1);
+              targetUri = targetUri.slice(0, -1);
+              matchLen -= 1;
+            }
+
+            // 3. Balanced parenthesis trimming:
+            // If the path ends with ')' or '）' and closing count > opening count,
+            // trim excess closing parens that belong to the enclosing sentence.
+            while (true) {
+              const openCount = (targetUri.match(/\(/g) || []).length;
+              const closeCount = (targetUri.match(/\)/g) || []).length;
+              if (closeCount > openCount && targetUri.endsWith(')')) {
+                fullMatch = fullMatch.slice(0, -1);
+                targetUri = targetUri.slice(0, -1);
+                matchLen -= 1;
+                continue;
+              }
+              const openFull = (targetUri.match(/（/g) || []).length;
+              const closeFull = (targetUri.match(/）/g) || []).length;
+              if (closeFull > openFull && targetUri.endsWith('）')) {
+                fullMatch = fullMatch.slice(0, -1);
+                targetUri = targetUri.slice(0, -1);
+                matchLen -= 1;
+                continue;
+              }
+              break;
             }
 
             if (matchLen <= 3) continue;
