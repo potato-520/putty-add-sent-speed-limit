@@ -4286,13 +4286,59 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
             session_clone(hwnd, sess_id);
         } else if (strstr(payload, ":open_editor")) {
             int sess_id = atoi(payload);
+            const char *dir_ptr = NULL;
+            const char *p = strstr(payload, ":open_editor:");
+            if (p) {
+                dir_ptr = p + strlen(":open_editor:");
+            }
             WebViewSession *sess = session_find(sess_id);
-            if (sess) {
+            if (sess && sess->cfg) {
                 int proto = conf_get_int(sess->cfg, CONF_protocol);
-                if (proto != PROT_SSH) {
-                    MessageBox(hwnd, "当前会话不是 SSH 协议，文件浏览器仅支持 SSH / SFTP 会话。", "提示", MB_OK | MB_ICONINFORMATION);
-                } else {
+                char distro[128] = {0};
+                get_session_wsl_distro(sess, distro, sizeof(distro));
+                const char *rcmd = conf_get_str_ambi(sess->cfg, CONF_remote_cmd, NULL);
+                const char *host = conf_get_str(sess->cfg, CONF_host);
+                bool is_wsl = (proto == PROT_CONPTY) && (distro[0] || (rcmd && strstr(rcmd, "wsl")) || (host && !strnicmp(host, "wsl", 3)));
+
+                if (proto == PROT_SSH) {
+                    /* SSH session -> open built-in SFTP Remote Editor window */
                     editor_window_open(sess_id, NULL, 0);
+                } else if (is_wsl) {
+                    /* WSL session -> launch VS Code inside WSL for the session directory */
+                    const char *target = (dir_ptr && *dir_ptr) ? dir_ptr : ".";
+                    dbg_log("open_editor: launching WSL VS Code for distro='%s', target='%s'", distro, target);
+                    if (!launch_wsl_code(distro, target, 0)) {
+                        MessageBox(hwnd, "未能成功呼出 WSL 中的 VS Code，请确认已在 WSL 中安装或启用了 'code' 命令。", "提示", MB_OK | MB_ICONWARNING);
+                    }
+                } else {
+                    /* PowerShell / Windows Local session -> launch Windows VS Code */
+                    wchar_t vscode_exe[MAX_PATH];
+                    if (find_vscode_path(vscode_exe, MAX_PATH)) {
+                        wchar_t params[MAX_PATH * 2 + 64] = {0};
+                        if (dir_ptr && *dir_ptr) {
+                            wchar_t wdir[MAX_PATH * 2] = {0};
+                            MultiByteToWideChar(CP_UTF8, 0, dir_ptr, -1, wdir, MAX_PATH * 2);
+                            for (wchar_t *wc = wdir; *wc; wc++) {
+                                if (*wc == L'/') *wc = L'\\';
+                            }
+                            _snwprintf(params, sizeof(params) / sizeof(wchar_t), L"\"%s\"", wdir);
+                        } else {
+                            _snwprintf(params, sizeof(params) / sizeof(wchar_t), L".");
+                        }
+                        dbg_log("open_editor: launching Windows VS Code with params: %ls", params);
+                        ShellExecuteW(hwnd, L"open", vscode_exe, params, NULL, SW_SHOWNORMAL);
+                    } else {
+                        if (dir_ptr && *dir_ptr) {
+                            wchar_t wdir[MAX_PATH * 2] = {0};
+                            MultiByteToWideChar(CP_UTF8, 0, dir_ptr, -1, wdir, MAX_PATH * 2);
+                            for (wchar_t *wc = wdir; *wc; wc++) {
+                                if (*wc == L'/') *wc = L'\\';
+                            }
+                            ShellExecuteW(hwnd, L"open", wdir, NULL, NULL, SW_SHOWNORMAL);
+                        } else {
+                            MessageBox(hwnd, "未检测到 VS Code (code.exe)，请先安装 VS Code 并将其添加到系统环境变量 PATH 中。", "提示", MB_OK | MB_ICONINFORMATION);
+                        }
+                    }
                 }
             }
         } else if (strstr(payload, ":detach")) {
