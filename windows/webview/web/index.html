@@ -627,6 +627,196 @@
       background: #1177bb;
     }
 
+    /* Multi-line Editor History Panel Styles */
+    .mle-view-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+    .mle-history-view {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      background: #252526;
+    }
+    .mle-history-toolbar {
+      padding: 6px 12px;
+      background: #2d2d2d;
+      border-bottom: 1px solid #3c3c3c;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .mle-history-toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .mle-history-title-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #e0e0e0;
+      font-weight: 500;
+    }
+    .mle-history-badge-count {
+      font-size: 11px;
+      background: #007acc;
+      color: #fff;
+      padding: 1px 6px;
+      border-radius: 10px;
+    }
+    .mle-history-filter-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+      color: #aaa;
+      margin-left: 6px;
+    }
+    .mle-history-filter-toggle label {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      cursor: pointer;
+    }
+    .mle-history-filter-toggle input {
+      cursor: pointer;
+    }
+    .mle-history-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .mle-history-search-input {
+      background: #1e1e1e;
+      border: 1px solid #3c3c3c;
+      border-radius: 4px;
+      padding: 4px 8px;
+      color: #d4d4d4;
+      font-size: 11.5px;
+      outline: none;
+      width: 150px;
+      transition: border-color 0.15s, width 0.15s;
+    }
+    .mle-history-search-input:focus {
+      border-color: #007acc;
+      width: 190px;
+    }
+    .mle-history-tip {
+      font-size: 11px;
+      color: #858585;
+      padding: 4px 12px;
+      background: #202020;
+      border-bottom: 1px solid #333333;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .mle-history-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .mle-history-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      color: #888;
+      text-align: center;
+      user-select: none;
+    }
+    .mle-history-item {
+      background: #1e1e1e;
+      border: 1px solid #383838;
+      border-radius: 5px;
+      padding: 8px 10px;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      cursor: pointer;
+    }
+    .mle-history-item:hover {
+      border-color: #007acc;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    .mle-history-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      user-select: none;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .mle-history-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+    }
+    .mle-history-index {
+      color: #4fc1ff;
+      font-weight: 600;
+      font-family: Consolas, monospace;
+    }
+    .mle-history-time {
+      color: #9cdcfe;
+    }
+    .mle-history-stats {
+      color: #858585;
+      font-size: 11px;
+    }
+    .mle-history-sess-tag {
+      font-size: 10.5px;
+      background: rgba(0, 122, 204, 0.2);
+      border: 1px solid rgba(0, 122, 204, 0.4);
+      color: #61afef;
+      padding: 0 5px;
+      border-radius: 3px;
+    }
+    .mle-history-item-actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+    .mle-btn-xs {
+      padding: 3px 8px;
+      font-size: 11px;
+      border-radius: 3px;
+    }
+    .mle-history-preview {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      padding: 6px 8px;
+      color: #d4d4d4;
+      font-family: 'Cascadia Code', Consolas, 'Segoe UI', monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 110px;
+      overflow-y: auto;
+      user-select: text;
+    }
+    #mle-history-badge {
+      font-size: 11px;
+      color: #9cdcfe;
+    }
+
     /* SSH Authentication Modal Dialog */
     .ssh-auth-backdrop {
       position: fixed;
@@ -1074,6 +1264,13 @@
           <span class="mle-title-tag">可拖动 / 缩放</span>
         </div>
         <div class="mle-header-actions">
+          <button id="mle-history-header-btn" class="mle-btn-icon" title="查看历史记录 (Ctrl+H)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span id="mle-history-badge">历史 (0)</span>
+          </button>
           <button id="mle-opacity-btn" class="mle-btn-icon" title="切换窗口透明度 (方便看清背景终端内容)">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"></circle>
@@ -1094,32 +1291,74 @@
           <button id="mle-close-btn" class="mle-btn-icon" title="关闭 (Esc)">✕</button>
         </div>
       </div>
-      <div class="mle-body">
-        <div class="mle-tip">
-          💡 <b>独立浮窗</b>：顶栏可拖动、右下角可缩放、点击“100%”可切半透明看背景。按 <kbd>Enter</kbd> 正常换行，<kbd>Ctrl+Enter</kbd> 发送到终端（不自动执行）。
+      <!-- Editor View -->
+      <div id="mle-editor-view" class="mle-view-container">
+        <div class="mle-body">
+          <div class="mle-tip">
+            💡 <b>独立浮窗</b>：顶栏可拖动、右下角可缩放、点击“100%”可切半透明看背景。按 <kbd>Enter</kbd> 正常换行，<kbd>Ctrl+Enter</kbd> 发送到终端（不自动执行）。
+          </div>
+          <textarea id="mle-textarea" placeholder="在此输入或编辑多行文本、脚本或命令...&#10;按 Enter 正常换行，绝不会提前发送到终端&#10;编辑完毕后点击下方【发送 / 粘贴】或按 Ctrl+Enter，如同右键粘贴一样安全填入终端" spellcheck="false"></textarea>
         </div>
-        <textarea id="mle-textarea" placeholder="在此输入或编辑多行文本、脚本或命令...&#10;按 Enter 正常换行，绝不会提前发送到终端&#10;编辑完毕后点击下方【发送 / 粘贴】或按 Ctrl+Enter，如同右键粘贴一样安全填入终端" spellcheck="false"></textarea>
+        <div class="mle-footer">
+          <div class="mle-status" id="mle-status">0 行, 0 字符</div>
+          <div class="mle-actions">
+            <button id="mle-history-footer-btn" class="mle-btn mle-btn-secondary" title="查看当前会话的历史输入数据 (Ctrl+H)">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px;">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              历史数据 <span id="mle-history-count" style="font-size: 11px; opacity: 0.8; margin-left: 2px;">(0)</span>
+            </button>
+            <button id="mle-clear-btn" class="mle-btn mle-btn-secondary" title="清空输入框内容">清空</button>
+            <button id="mle-copy-btn" class="mle-btn mle-btn-secondary" title="复制内容到系统剪贴板">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px;">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              复制
+            </button>
+            <button id="mle-cancel-btn" class="mle-btn mle-btn-secondary">取消 (Esc)</button>
+            <button id="mle-send-btn" class="mle-btn mle-btn-primary" title="像粘贴一样将内容填入终端，不自动触发回车">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+              </svg>
+              发送 / 粘贴 (Ctrl+Enter)
+            </button>
+          </div>
+        </div>
       </div>
-      <div class="mle-footer">
-        <div class="mle-status" id="mle-status">0 行, 0 字符</div>
-        <div class="mle-actions">
-          <button id="mle-clear-btn" class="mle-btn mle-btn-secondary" title="清空输入框内容">清空</button>
-          <button id="mle-copy-btn" class="mle-btn mle-btn-secondary" title="复制内容到系统剪贴板">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px;">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-            复制
-          </button>
-          <button id="mle-cancel-btn" class="mle-btn mle-btn-secondary">取消 (Esc)</button>
-          <button id="mle-send-btn" class="mle-btn mle-btn-primary" title="像粘贴一样将内容填入终端，不自动触发回车">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-            </svg>
-            发送 / 粘贴 (Ctrl+Enter)
-          </button>
+      <!-- History View -->
+      <div id="mle-history-view" class="mle-history-view" style="display: none;">
+        <div class="mle-history-toolbar">
+          <div class="mle-history-toolbar-left">
+            <button id="mle-history-back-btn" class="mle-btn mle-btn-secondary" style="padding: 4px 8px; font-size: 11.5px;" title="返回编辑器 (Esc)">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 3px;">
+                <line x1="19" y1="12" x2="5" y2="12"></line>
+                <polyline points="12 19 5 12 12 5"></polyline>
+              </svg>
+              返回编辑器 (Esc)
+            </button>
+            <div class="mle-history-title-badge">
+              <span id="mle-history-session-name">当前会话历史</span>
+              <span id="mle-history-total-tag" class="mle-history-badge-count">0 条</span>
+            </div>
+            <div class="mle-history-filter-toggle">
+              <label><input type="radio" name="mle-history-scope" id="mle-scope-curr" checked> 仅当前会话</label>
+              <label><input type="radio" name="mle-history-scope" id="mle-scope-all"> 全部会话</label>
+            </div>
+          </div>
+          <div class="mle-history-toolbar-right">
+            <input type="text" id="mle-history-search" class="mle-history-search-input" placeholder="🔍 搜索历史内容..." />
+            <button id="mle-history-clear-btn" class="mle-btn mle-btn-secondary" title="清空历史数据" style="padding: 4px 8px; font-size: 11.5px; color: #f48771;">
+              清空历史
+            </button>
+          </div>
         </div>
+        <div class="mle-history-tip">
+          💡 双击任意卡片或点击【填入编辑器】可直接载入草稿并返回；【直接发送】可直接粘贴到终端。
+        </div>
+        <div id="mle-history-list" class="mle-history-list"></div>
       </div>
     </div>
   </div>
@@ -3274,6 +3513,8 @@
       const mleModalEl = document.getElementById('mle-modal');
       const mleDialogEl = document.querySelector('.mle-dialog');
       const mleHeaderEl = document.querySelector('.mle-header');
+      const mleEditorViewEl = document.getElementById('mle-editor-view');
+      const mleHistoryViewEl = document.getElementById('mle-history-view');
       const mleTextareaEl = document.getElementById('mle-textarea');
       const mleTitleTextEl = document.getElementById('mle-title-text');
       const mleStatusEl = document.getElementById('mle-status');
@@ -3285,6 +3526,20 @@
       const mleCancelBtn = document.getElementById('mle-cancel-btn');
       const mleClearBtn = document.getElementById('mle-clear-btn');
       const mleSendBtn = document.getElementById('mle-send-btn');
+      const mleHistoryHeaderBtn = document.getElementById('mle-history-header-btn');
+      const mleHistoryFooterBtn = document.getElementById('mle-history-footer-btn');
+      const mleHistoryBackBtn = document.getElementById('mle-history-back-btn');
+      const mleHistoryClearBtn = document.getElementById('mle-history-clear-btn');
+      const mleHistorySearchInput = document.getElementById('mle-history-search');
+      const mleHistoryListEl = document.getElementById('mle-history-list');
+      const mleScopeCurrRadio = document.getElementById('mle-scope-curr');
+      const mleScopeAllRadio = document.getElementById('mle-scope-all');
+
+      // History In-Memory Store: sessionId -> Array<{ id, text, timestamp, timeStr, lines, chars, sessionId, sessionTitle }>
+      const mleHistoryMap = {};
+      let mleCurrentView = 'editor'; // 'editor' | 'history'
+      let mleHistoryScope = 'current'; // 'current' | 'all'
+      let mleHistorySearchKeyword = '';
 
       const MLE_OPACITY_LEVELS = [1.0, 0.85, 0.65, 0.45];
       let mleOpacityIndex = 0;
@@ -3322,6 +3577,10 @@
         if (mleModalEl && mleModalEl.style.display !== 'none') {
           mleActiveSessionId = sid;
           updateMleTitle();
+          updateMleHistoryBadges();
+          if (mleCurrentView === 'history') {
+            renderMleHistoryList();
+          }
         }
       }
 
@@ -3434,11 +3693,193 @@
         }
       }
 
+      // History Management Functions
+      function addMleHistory(sessionId, text) {
+        if (!text || !text.trim()) return;
+        const sid = sessionId || (activeGlobalSessionId || 'default');
+        if (!mleHistoryMap[sid]) {
+          mleHistoryMap[sid] = [];
+        }
+        const list = mleHistoryMap[sid];
+        const now = new Date();
+        const timeStr = String(now.getHours()).padStart(2, '0') + ':' +
+                        String(now.getMinutes()).padStart(2, '0') + ':' +
+                        String(now.getSeconds()).padStart(2, '0');
+        const lines = text.split('\n').length;
+        const chars = text.length;
+        const s = sessions[sid];
+        const sessionTitle = s ? (s.baseTitle || s.title || `Session ${sid}`) : `Session ${sid}`;
+
+        // Deduplicate: if exactly matches the top item, update its timestamp and move to top
+        const existingIdx = list.findIndex(item => item.text === text);
+        if (existingIdx === 0) {
+          list[0].timestamp = now.getTime();
+          list[0].timeStr = timeStr;
+          updateMleHistoryBadges();
+          return;
+        } else if (existingIdx > 0) {
+          list.splice(existingIdx, 1);
+        }
+
+        list.unshift({
+          id: 'mle-h-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+          text: text,
+          timestamp: now.getTime(),
+          timeStr: timeStr,
+          lines: lines,
+          chars: chars,
+          sessionId: sid,
+          sessionTitle: sessionTitle
+        });
+
+        // Retain up to 200 items per session
+        if (list.length > 200) {
+          list.pop();
+        }
+
+        updateMleHistoryBadges();
+      }
+
+      function updateMleHistoryBadges() {
+        const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+        const currList = (targetSid && mleHistoryMap[targetSid]) ? mleHistoryMap[targetSid] : [];
+        const count = currList.length;
+
+        const badgeEl = document.getElementById('mle-history-badge');
+        if (badgeEl) badgeEl.textContent = `历史 (${count})`;
+
+        const countEl = document.getElementById('mle-history-count');
+        if (countEl) countEl.textContent = `(${count})`;
+
+        const totalTagEl = document.getElementById('mle-history-total-tag');
+        if (totalTagEl) {
+          if (mleHistoryScope === 'all') {
+            let total = 0;
+            Object.keys(mleHistoryMap).forEach(k => { total += mleHistoryMap[k].length; });
+            totalTagEl.textContent = `${total} 条`;
+          } else {
+            totalTagEl.textContent = `${count} 条`;
+          }
+        }
+      }
+
+      function renderMleHistoryList() {
+        if (!mleHistoryListEl) return;
+        const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+        const sessTitle = (targetSid && sessions[targetSid]) ? (sessions[targetSid].baseTitle || sessions[targetSid].title || `Session ${targetSid}`) : `当前会话`;
+
+        const sessNameEl = document.getElementById('mle-history-session-name');
+        if (sessNameEl) {
+          sessNameEl.textContent = (mleHistoryScope === 'all') ? '全部会话历史' : `[${sessTitle}] 历史数据`;
+        }
+
+        let items = [];
+        if (mleHistoryScope === 'all') {
+          Object.keys(mleHistoryMap).forEach(k => {
+            items = items.concat(mleHistoryMap[k]);
+          });
+          items.sort((a, b) => b.timestamp - a.timestamp);
+        } else {
+          items = (targetSid && mleHistoryMap[targetSid]) ? mleHistoryMap[targetSid].slice() : [];
+        }
+
+        if (mleHistorySearchKeyword) {
+          const kw = mleHistorySearchKeyword.toLowerCase();
+          items = items.filter(item => item.text.toLowerCase().includes(kw));
+        }
+
+        if (items.length === 0) {
+          if (mleHistorySearchKeyword) {
+            mleHistoryListEl.innerHTML = `
+              <div class="mle-history-empty">
+                <div style="font-size: 24px; margin-bottom: 6px;">🔍</div>
+                <div>未找到包含 “${escapeHtml(mleHistorySearchKeyword)}” 的历史记录</div>
+              </div>`;
+          } else {
+            mleHistoryListEl.innerHTML = `
+              <div class="mle-history-empty">
+                <div style="font-size: 26px; margin-bottom: 8px;">📜</div>
+                <div style="font-weight: 500; margin-bottom: 4px; font-size: 13px;">当前会话暂无历史记录</div>
+                <div style="font-size: 11.5px; color: #888;">在此多行编辑器中点击【发送 / 粘贴】或按 Ctrl+Enter 后，输入的数据将安全记录在内存中。</div>
+              </div>`;
+          }
+          return;
+        }
+
+        let html = '';
+        items.forEach((item, idx) => {
+          const isOtherSession = (mleHistoryScope === 'all' && item.sessionId !== targetSid);
+          const sessionBadge = isOtherSession ? `<span class="mle-history-sess-tag" title="来自会话: ${escapeHtml(item.sessionTitle || item.sessionId)}">${escapeHtml(item.sessionTitle || item.sessionId)}</span>` : '';
+          html += `
+            <div class="mle-history-item" data-id="${item.id}" data-session-id="${item.sessionId}">
+              <div class="mle-history-item-header">
+                <div class="mle-history-meta">
+                  <span class="mle-history-index">#${idx + 1}</span>
+                  <span class="mle-history-time" title="${new Date(item.timestamp).toLocaleString()}">${item.timeStr}</span>
+                  <span class="mle-history-stats">${item.lines} 行, ${item.chars} 字符</span>
+                  ${sessionBadge}
+                </div>
+                <div class="mle-history-item-actions">
+                  <button class="mle-btn mle-btn-primary mle-btn-xs" data-action="fill" title="填入编辑器并返回 (双击卡片亦可)">填入编辑器</button>
+                  <button class="mle-btn mle-btn-secondary mle-btn-xs" data-action="append" title="追加到当前编辑器文本末尾">追加</button>
+                  <button class="mle-btn mle-btn-secondary mle-btn-xs" data-action="send" title="直接发送到终端，不覆盖当前草稿">直接发送</button>
+                  <button class="mle-btn mle-btn-secondary mle-btn-xs" data-action="copy" title="复制到系统剪贴板">复制</button>
+                  <button class="mle-btn-icon mle-btn-xs" data-action="del" title="删除此条记录">✕</button>
+                </div>
+              </div>
+              <pre class="mle-history-preview">${escapeHtml(item.text)}</pre>
+            </div>
+          `;
+        });
+        mleHistoryListEl.innerHTML = html;
+      }
+
+      function showMleEditorView() {
+        mleCurrentView = 'editor';
+        if (mleEditorViewEl) mleEditorViewEl.style.display = 'flex';
+        if (mleHistoryViewEl) mleHistoryViewEl.style.display = 'none';
+        setTimeout(() => {
+          if (mleTextareaEl) mleTextareaEl.focus();
+        }, 20);
+      }
+
+      function showMleHistoryView() {
+        mleCurrentView = 'history';
+        if (mleEditorViewEl) mleEditorViewEl.style.display = 'none';
+        if (mleHistoryViewEl) mleHistoryViewEl.style.display = 'flex';
+        renderMleHistoryList();
+        setTimeout(() => {
+          if (mleHistorySearchInput) mleHistorySearchInput.focus();
+        }, 20);
+      }
+
+      function toggleMleHistoryView() {
+        if (mleCurrentView === 'history') {
+          showMleEditorView();
+        } else {
+          showMleHistoryView();
+        }
+      }
+
+      function findHistoryItem(id, sid) {
+        if (sid && mleHistoryMap[sid]) {
+          const item = mleHistoryMap[sid].find(x => x.id === id);
+          if (item) return item;
+        }
+        for (const k in mleHistoryMap) {
+          const item = mleHistoryMap[k].find(x => x.id === id);
+          if (item) return item;
+        }
+        return null;
+      }
+
       function openMultiLineEditor(sessionId) {
         const s = sessions[sessionId];
         if (!s) return;
         mleActiveSessionId = sessionId;
         updateMleTitle();
+        updateMleHistoryBadges();
+        showMleEditorView();
         if (mleModalEl) {
           mleModalEl.style.display = 'block';
         }
@@ -3466,6 +3907,7 @@
         if (mleModalEl) {
           mleModalEl.style.display = 'none';
         }
+        showMleEditorView();
         const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
         if (targetSid && sessions[targetSid]) {
           sessions[targetSid].term.focus();
@@ -3481,6 +3923,12 @@
         }
         const s = sessions[targetSid];
         const rawText = mleTextareaEl ? mleTextareaEl.value : '';
+
+        // Record to in-memory history before clearing
+        if (rawText && rawText.length > 0) {
+          addMleHistory(targetSid, rawText);
+        }
+
         if (mleTextareaEl) {
           mleTextareaEl.value = '';
         }
@@ -3500,6 +3948,9 @@
           if (e.key === 'Enter' && e.ctrlKey) {
             e.preventDefault();
             sendMultiLineText();
+          } else if (e.key === 'h' && e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            toggleMleHistoryView();
           } else if (e.key === 'Escape') {
             e.preventDefault();
             closeMultiLineEditor();
@@ -3518,7 +3969,14 @@
         mleDialogEl.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') {
             e.preventDefault();
-            closeMultiLineEditor();
+            if (mleCurrentView === 'history') {
+              showMleEditorView();
+            } else {
+              closeMultiLineEditor();
+            }
+          } else if (e.key === 'h' && e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            toggleMleHistoryView();
           }
         });
       }
@@ -3549,6 +4007,145 @@
         });
       }
       if (mleSendBtn) mleSendBtn.addEventListener('click', sendMultiLineText);
+
+      // History View UI Listeners
+      if (mleHistoryHeaderBtn) {
+        mleHistoryHeaderBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleMleHistoryView();
+        });
+      }
+      if (mleHistoryFooterBtn) {
+        mleHistoryFooterBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showMleHistoryView();
+        });
+      }
+      if (mleHistoryBackBtn) {
+        mleHistoryBackBtn.addEventListener('click', () => {
+          showMleEditorView();
+        });
+      }
+      if (mleScopeCurrRadio) {
+        mleScopeCurrRadio.addEventListener('change', () => {
+          if (mleScopeCurrRadio.checked) {
+            mleHistoryScope = 'current';
+            updateMleHistoryBadges();
+            renderMleHistoryList();
+          }
+        });
+      }
+      if (mleScopeAllRadio) {
+        mleScopeAllRadio.addEventListener('change', () => {
+          if (mleScopeAllRadio.checked) {
+            mleHistoryScope = 'all';
+            updateMleHistoryBadges();
+            renderMleHistoryList();
+          }
+        });
+      }
+      if (mleHistorySearchInput) {
+        mleHistorySearchInput.addEventListener('input', (e) => {
+          mleHistorySearchKeyword = e.target.value.trim();
+          renderMleHistoryList();
+        });
+      }
+      if (mleHistoryClearBtn) {
+        mleHistoryClearBtn.addEventListener('click', () => {
+          const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+          if (mleHistoryScope === 'all') {
+            if (confirm('确认清空所有会话的历史记录吗？')) {
+              for (const k in mleHistoryMap) {
+                delete mleHistoryMap[k];
+              }
+              updateMleHistoryBadges();
+              renderMleHistoryList();
+            }
+          } else {
+            if (targetSid && mleHistoryMap[targetSid] && mleHistoryMap[targetSid].length > 0) {
+              if (confirm('确认清空当前会话的历史输入数据吗？')) {
+                mleHistoryMap[targetSid] = [];
+                updateMleHistoryBadges();
+                renderMleHistoryList();
+              }
+            }
+          }
+        });
+      }
+
+      // History item card click & double-click interactions
+      if (mleHistoryListEl) {
+        mleHistoryListEl.addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-action]');
+          const itemEl = e.target.closest('.mle-history-item');
+          if (!itemEl) return;
+
+          const id = itemEl.dataset.id;
+          const sid = itemEl.dataset.sessionId;
+          const item = findHistoryItem(id, sid);
+          if (!item) return;
+
+          if (btn) {
+            e.stopPropagation();
+            const action = btn.dataset.action;
+            if (action === 'fill') {
+              if (mleTextareaEl) {
+                mleTextareaEl.value = item.text;
+                updateMleStatus();
+                showMleEditorView();
+                mleTextareaEl.selectionStart = mleTextareaEl.selectionEnd = mleTextareaEl.value.length;
+              }
+            } else if (action === 'append') {
+              if (mleTextareaEl) {
+                const cur = mleTextareaEl.value;
+                if (cur.length > 0 && !cur.endsWith('\n')) {
+                  mleTextareaEl.value = cur + '\n' + item.text;
+                } else {
+                  mleTextareaEl.value = cur + item.text;
+                }
+                updateMleStatus();
+                showMleEditorView();
+                mleTextareaEl.selectionStart = mleTextareaEl.selectionEnd = mleTextareaEl.value.length;
+              }
+            } else if (action === 'send') {
+              const targetSid = (mleActiveSessionId && sessions[mleActiveSessionId]) ? mleActiveSessionId : activeGlobalSessionId;
+              if (targetSid && sessions[targetSid] && sessions[targetSid].term) {
+                sessions[targetSid].term.paste(item.text);
+                closeMultiLineEditor();
+              }
+            } else if (action === 'copy') {
+              sendToHost('4', item.text);
+              const origText = btn.textContent;
+              btn.textContent = '已复制!';
+              setTimeout(() => {
+                btn.textContent = origText;
+              }, 1200);
+            } else if (action === 'del') {
+              if (sid && mleHistoryMap[sid]) {
+                mleHistoryMap[sid] = mleHistoryMap[sid].filter(x => x.id !== id);
+              }
+              updateMleHistoryBadges();
+              renderMleHistoryList();
+            }
+          }
+        });
+
+        // Double click to fill and return to editor
+        mleHistoryListEl.addEventListener('dblclick', (e) => {
+          if (e.target.closest('button')) return;
+          const itemEl = e.target.closest('.mle-history-item');
+          if (!itemEl) return;
+          const id = itemEl.dataset.id;
+          const sid = itemEl.dataset.sessionId;
+          const item = findHistoryItem(id, sid);
+          if (item && mleTextareaEl) {
+            mleTextareaEl.value = item.text;
+            updateMleStatus();
+            showMleEditorView();
+            mleTextareaEl.selectionStart = mleTextareaEl.selectionEnd = mleTextareaEl.value.length;
+          }
+        });
+      }
 
       // SSH Authentication Modal Logic
       sshAuthActiveSessionId = null;
