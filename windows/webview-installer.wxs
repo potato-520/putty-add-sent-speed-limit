@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Product Id="*" Name="$(var.ProductName)" Language="1033" Version="$(var.Version)"
+           Manufacturer="PuTTY-WebView" UpgradeCode="$(var.UpgradeCode)">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" Platform="x64" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer PuTTY-WebView is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="REINSTALLMODE" Value="amus" />
+    <Property Id="INSTALLDIR" Secure="yes" />
+    <Property Id="SAVEDINSTALLDIR">
+      <RegistrySearch Id="FindInstallDir" Root="HKCU"
+                      Key="Software\PuTTY-WebView\$(var.ProductName)" Name="InstallDir"
+                      Type="raw" Win64="yes" />
+    </Property>
+    <Icon Id="AppIcon.exe" SourceFile="$(var.SourceDir)\windows\putty.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+    <!-- Restore before costing; an explicit UI / command-line choice takes precedence. -->
+    <SetProperty Id="INSTALLDIR" Action="RestoreInstallDir" Value="[SAVEDINSTALLDIR]"
+                 After="AppSearch" Sequence="both">NOT INSTALLDIR AND SAVEDINSTALLDIR</SetProperty>
+    <SetProperty Id="INSTALLDIR" Action="DefaultInstallDir"
+                 Value="[LocalAppDataFolder]Programs\$(var.ProductName)\"
+                 After="RestoreInstallDir" Sequence="both">NOT INSTALLDIR</SetProperty>
+    <SetProperty Id="ASSETCLEANUP" Value="[INSTALLDIR]\webview"
+                 Before="WixRemoveFoldersEx" Sequence="execute" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsDir" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="$(var.ProductName)">
+            <Component Id="Application" Guid="$(var.AppGuid)" Win64="yes">
+              <File Id="ApplicationExe" Source="$(var.BuildDir)\putty_webview.exe" />
+              <RegistryValue Root="HKCU" Key="Software\PuTTY-WebView\$(var.ProductName)"
+                             Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\PuTTY-WebView\$(var.ProductName)"
+                             Name="InstallDir" Type="string" Value="[INSTALLDIR]" />
+              <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder"
+                        Name="$(var.ProductName)" Target="[#ApplicationExe]" WorkingDirectory="INSTALLDIR" />
+              <Shortcut Id="DesktopShortcut" Directory="DesktopFolder"
+                        Name="$(var.ProductName)" Target="[#ApplicationExe]" WorkingDirectory="INSTALLDIR" />
+              <!-- Only this dedicated static-assets tree is disposable. -->
+              <util:RemoveFolderEx Id="CleanStaticAssets" On="both" Property="ASSETCLEANUP" />
+              <RemoveFolder Id="RemoveInstallDir" On="uninstall" />
+              <RemoveFolder Id="RemoveWebRoot" Directory="WEBROOT" On="uninstall" />
+              <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+            </Component>
+            <Component Id="License" Guid="$(var.LicenseGuid)" Win64="yes">
+              <File Source="$(var.SourceDir)\LICENCE" />
+              <RegistryValue Root="HKCU" Key="Software\PuTTY-WebView\$(var.ProductName)"
+                             Name="License" Type="integer" Value="1" KeyPath="yes" />
+            </Component>
+            <Directory Id="WEBROOT" Name="webview" />
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+    <Feature Id="Main" Title="PuTTY-WebView" Level="1">
+      <ComponentRef Id="Application" />
+      <ComponentRef Id="License" />
+      <ComponentGroupRef Id="WebAssets" />
+    </Feature>
+    <UIRef Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Product>
+</Wix>

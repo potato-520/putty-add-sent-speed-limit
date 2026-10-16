@@ -33,35 +33,7 @@ if "%TARGETS%"=="" (
 echo [INFO] Build targets: %TARGETS%
 echo [INFO] Output directory: %BUILD_DIR%\Release
 
-:: 3. Pack Web Assets if putty_webview is targeted
-echo "%TARGETS%" | findstr /i "putty_webview putty_webkit" >nul
-if %ERRORLEVEL% equ 0 (
-    echo [INFO] Packing Web assets...
-    set "PYTHON_CMD="
-    python --version >nul 2>nul
-    if !ERRORLEVEL! equ 0 (
-        set "PYTHON_CMD=python"
-    ) else (
-        py --version >nul 2>nul
-        if !ERRORLEVEL! equ 0 (
-            set "PYTHON_CMD=py"
-        )
-    )
-
-    if defined PYTHON_CMD (
-        !PYTHON_CMD! "%SCRIPT_DIR%windows\webview\pack_assets.py" "%SCRIPT_DIR%windows\webview\web" "%SCRIPT_DIR%windows\webview\webview_assets.zip"
-        if !ERRORLEVEL! neq 0 (
-            echo [ERROR] Failed to pack webview assets.
-            exit /b 1
-        )
-    ) else (
-        echo [WARNING] python not found. Checking existing webview_assets.zip...
-        if not exist "%SCRIPT_DIR%windows\webview\webview_assets.zip" (
-            echo [ERROR] webview_assets.zip is missing and python is not available to create it.
-            exit /b 1
-        )
-    )
-)
+:: Web assets are external files copied by CMake; no embedded ZIP.
 
 :: 4. CMake Configure
 echo [INFO] Configuring CMake with Visual Studio 17 2022 (x64)...

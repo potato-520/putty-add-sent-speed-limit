@@ -25,6 +25,7 @@
 #include <wincrypt.h>
 #include <fcntl.h>
 #include <io.h>
+#include <dwmapi.h>
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "ole32.lib")
@@ -148,57 +149,6 @@ static void mem_log_dump_to_strbuf(strbuf *sb)
     LeaveCriticalSection(&g_mem_log_cs);
 }
 
-#include "miniz.h"
-
-#define IDR_WEBVIEW_ASSETS_ZIP      2000
-#define IDR_WEB_INDEX_HTML          2001
-#define IDR_WEB_XTERM_JS            2002
-#define IDR_WEB_XTERM_CSS           2003
-#define IDR_WEB_FIT_ADDON_JS        2004
-#define IDR_WEB_WEBLINKS_ADDON_JS   2005
-#define IDR_WEB_EDITOR_HTML         2006
-#define IDR_WEB_WEBGL_ADDON_JS      2007
-#define IDR_WEB_UNICODE11_ADDON_JS  2008
-#define IDR_WEB_SEARCH_ADDON_JS     2009
-
-struct EmbeddedAsset {
-    const wchar_t *filename;
-    int res_id;
-};
-
-static const struct EmbeddedAsset embedded_assets[] = {
-    { L"index.html", IDR_WEB_INDEX_HTML },
-    { L"xterm.js", IDR_WEB_XTERM_JS },
-    { L"xterm.css", IDR_WEB_XTERM_CSS },
-    { L"xterm-addon-fit.js", IDR_WEB_FIT_ADDON_JS },
-    { L"xterm-addon-web-links.js", IDR_WEB_WEBLINKS_ADDON_JS },
-    { L"xterm-addon-webgl.js", IDR_WEB_WEBGL_ADDON_JS },
-    { L"xterm-addon-unicode11.js", IDR_WEB_UNICODE11_ADDON_JS },
-    { L"xterm-addon-search.js", IDR_WEB_SEARCH_ADDON_JS },
-    { L"editor.html", IDR_WEB_EDITOR_HTML },
-};
-#define NUM_EMBEDDED_ASSETS (sizeof(embedded_assets) / sizeof(embedded_assets[0]))
-
-
-static bool extract_resource_to_file(int res_id, const wchar_t *filepath)
-{
-    HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(res_id), MAKEINTRESOURCEW(10));
-    if (!hrsrc) return false;
-    HGLOBAL hg = LoadResource(hinst, hrsrc);
-    if (!hg) return false;
-    const void *data = LockResource(hg);
-    DWORD size = SizeofResource(hinst, hrsrc);
-    if (!data || size == 0) return false;
-
-    HANDLE hf = CreateFileW(filepath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hf == INVALID_HANDLE_VALUE) return false;
-
-    DWORD written = 0;
-    BOOL ok = WriteFile(hf, data, size, &written, NULL);
-    CloseHandle(hf);
-    return ok && (written == size);
-}
-
 static bool create_directory_recursive(const wchar_t *dir)
 {
     wchar_t tmp[MAX_PATH];
@@ -215,185 +165,23 @@ static bool create_directory_recursive(const wchar_t *dir)
     return CreateDirectoryW(tmp, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-static bool extract_zip_from_memory(const void *zip_data, size_t zip_size, const wchar_t *target_root_dir)
+/* Static assets are installed by MSI. Never unpack or rewrite them at runtime. */
+static bool resolve_webview_assets(wchar_t *html, wchar_t *editor, size_t capacity)
 {
-    mz_zip_archive zip_archive;
-    memset(&zip_archive, 0, sizeof(zip_archive));
-
-    if (!mz_zip_reader_init_mem(&zip_archive, zip_data, zip_size, 0)) {
-        dbg_log("extract_zip_from_memory: mz_zip_reader_init_mem failed");
-        return false;
-    }
-
-    mz_uint num_files = mz_zip_reader_get_num_files(&zip_archive);
-    dbg_log("extract_zip_from_memory: unpacking %u files into %ls...", num_files, target_root_dir);
-
-    for (mz_uint i = 0; i < num_files; i++) {
-        mz_zip_archive_file_stat file_stat;
-        if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) {
-            continue;
-        }
-
-        if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) {
-            continue;
-        }
-
-        wchar_t wrelpath[MAX_PATH] = {0};
-        MultiByteToWideChar(CP_UTF8, 0, file_stat.m_filename, -1, wrelpath, MAX_PATH);
-
-        wchar_t full_filepath[MAX_PATH];
-        _snwprintf(full_filepath, MAX_PATH, L"%s\\%s", target_root_dir, wrelpath);
-
-        for (wchar_t *p = full_filepath; *p; p++) {
-            if (*p == L'/') *p = L'\\';
-        }
-
-        /* Ensure parent directory exists */
-        wchar_t parent_dir[MAX_PATH];
-        wcsncpy(parent_dir, full_filepath, MAX_PATH - 1);
-        parent_dir[MAX_PATH - 1] = L'\0';
-        wchar_t *last_slash = wcsrchr(parent_dir, L'\\');
-        if (last_slash) {
-            *last_slash = L'\0';
-            create_directory_recursive(parent_dir);
-        }
-
-        /* Check if file already exists with same uncompressed size */
-        HANDLE hf = CreateFileW(full_filepath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hf != INVALID_HANDLE_VALUE) {
-            LARGE_INTEGER fsize;
-            if (GetFileSizeEx(hf, &fsize) && (mz_uint64)fsize.QuadPart == file_stat.m_uncomp_size) {
-                CloseHandle(hf);
-                continue;
-            }
-            CloseHandle(hf);
-        }
-
-        size_t uncomp_size = 0;
-        void *p = mz_zip_reader_extract_to_heap(&zip_archive, i, &uncomp_size, 0);
-        if (p) {
-            HANDLE out_hf = CreateFileW(full_filepath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (out_hf != INVALID_HANDLE_VALUE) {
-                DWORD written = 0;
-                WriteFile(out_hf, p, (DWORD)uncomp_size, &written, NULL);
-                CloseHandle(out_hf);
-            }
-            mz_free(p);
-        }
-    }
-
-    mz_zip_reader_end(&zip_archive);
-    dbg_log("extract_zip_from_memory: extraction complete!");
-    return true;
-}
-
-static void ensure_webview_assets(wchar_t *out_html_path, wchar_t *out_editor_path, size_t max_len)
-{
-    wchar_t exe_path[MAX_PATH];
-    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
-    wchar_t *last_slash = wcsrchr(exe_path, L'\\');
-    if (last_slash) *last_slash = L'\0';
-
-    /* 1. Check development tree fallback (source checkout) FIRST so dev edits are instant */
-    wchar_t dev_html[MAX_PATH];
-    _snwprintf(dev_html, MAX_PATH, L"%s\\..\\..\\windows\\webview\\web\\index.html", exe_path);
-    if (GetFileAttributesW(dev_html) != INVALID_FILE_ATTRIBUTES) {
-        wcsncpy(out_html_path, dev_html, max_len - 1);
-        out_html_path[max_len - 1] = L'\0';
-        _snwprintf(out_editor_path, max_len, L"%s\\..\\..\\windows\\webview\\web\\editor.html", exe_path);
-        return;
-    }
-
-    /* 2. Deployed standalone mode: target directories */
-    wchar_t target_webview_root[MAX_PATH];
-    _snwprintf(target_webview_root, MAX_PATH, L"%s\\webview", exe_path);
-    _snwprintf(target_web_dir, MAX_PATH, L"%s\\web", target_webview_root);
-    _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
-    _snwprintf(out_editor_path, max_len, L"%s\\editor.html", target_web_dir);
-
-    bool dir_ok = create_directory_recursive(target_web_dir);
-    if (!dir_ok) {
-        /* If exe directory is read-only (e.g. Program Files), fall back to %LOCALAPPDATA% */
-        wchar_t appdata[MAX_PATH];
-        if (GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH) > 0) {
-            _snwprintf(target_webview_root, MAX_PATH, L"%s\\PuTTY-WebView\\webview", appdata);
-            _snwprintf(target_web_dir, MAX_PATH, L"%s\\web", target_webview_root);
-            create_directory_recursive(target_web_dir);
-            _snwprintf(out_html_path, max_len, L"%s\\index.html", target_web_dir);
-            _snwprintf(out_editor_path, max_len, L"%s\\editor.html", target_web_dir);
-        }
-    }
-
-    /* 3. Check for comprehensive embedded zip package (IDR_WEBVIEW_ASSETS_ZIP) */
-    HRSRC hZipRsrc = FindResourceW(hinst, MAKEINTRESOURCEW(IDR_WEBVIEW_ASSETS_ZIP), MAKEINTRESOURCEW(10));
-    if (hZipRsrc) {
-        DWORD zip_size = SizeofResource(hinst, hZipRsrc);
-        HGLOBAL hg = LoadResource(hinst, hZipRsrc);
-        const void *zip_data = hg ? LockResource(hg) : NULL;
-        if (zip_data && zip_size > 0) {
-            wchar_t stamp_file[MAX_PATH];
-            _snwprintf(stamp_file, MAX_PATH, L"%s\\.assets_stamp", target_webview_root);
-
-            wchar_t test_monaco[MAX_PATH];
-            _snwprintf(test_monaco, MAX_PATH, L"%s\\vs\\loader.js", target_web_dir);
-
-            bool needs_extract = true;
-            FILE *sfp = _wfopen(stamp_file, L"rb");
-            if (sfp) {
-                DWORD stored_size = 0;
-                if (fread(&stored_size, sizeof(stored_size), 1, sfp) == 1 && stored_size == zip_size) {
-                    if (GetFileAttributesW(test_monaco) != INVALID_FILE_ATTRIBUTES &&
-                        GetFileAttributesW(out_html_path) != INVALID_FILE_ATTRIBUTES) {
-                        needs_extract = false;
-                    }
-                }
-                fclose(sfp);
-            }
-
-            if (needs_extract) {
-                dbg_log("ensure_webview_assets: unpacking complete embedded asset package (%u bytes)...", zip_size);
-                extract_zip_from_memory(zip_data, zip_size, target_webview_root);
-                sfp = _wfopen(stamp_file, L"wb");
-                if (sfp) {
-                    fwrite(&zip_size, sizeof(zip_size), 1, sfp);
-                    fclose(sfp);
-                }
-            } else {
-                dbg_log("ensure_webview_assets: webview assets verified up to date (stamp match, 0ms)");
-            }
-            return;
-        }
-    }
-
-    /* 4. Fallback legacy sync if zip is not embedded */
-    for (size_t i = 0; i < NUM_EMBEDDED_ASSETS; i++) {
-        HRSRC hrsrc = FindResourceW(hinst, MAKEINTRESOURCEW(embedded_assets[i].res_id), MAKEINTRESOURCEW(10));
-        if (!hrsrc) continue;
-        DWORD res_size = SizeofResource(hinst, hrsrc);
-        if (res_size == 0) continue;
-
-        wchar_t filepath[MAX_PATH];
-        _snwprintf(filepath, MAX_PATH, L"%s\\%s", target_web_dir, embedded_assets[i].filename);
-
-        bool needs_update = false;
-        HANDLE hf = CreateFileW(filepath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hf == INVALID_HANDLE_VALUE) {
-            needs_update = true;
-        } else {
-            LARGE_INTEGER fsize;
-            if (!GetFileSizeEx(hf, &fsize) || (DWORD)fsize.QuadPart != res_size) {
-                needs_update = true;
-            }
-            CloseHandle(hf);
-        }
-
-        if (needs_update) {
-            dbg_log("Asset sync: extracting %ls (%u bytes)", embedded_assets[i].filename, res_size);
-            extract_resource_to_file(embedded_assets[i].res_id, filepath);
-        }
-    }
+    wchar_t exe_dir[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+    if (!n || n >= MAX_PATH) return false;
+    wchar_t *slash = wcsrchr(exe_dir, L'\\');
+    if (!slash) return false;
+    *slash = L'\0';
+    int count = _snwprintf(target_web_dir, MAX_PATH,
+                          L"%s\\webview\\web", exe_dir);
+    if (count < 0 || count >= MAX_PATH) return false;
+    _snwprintf(html, capacity, L"%s\\index.html", target_web_dir);
+    _snwprintf(editor, capacity, L"%s\\editor.html", target_web_dir);
+    html[capacity - 1] = editor[capacity - 1] = L'\0';
+    return GetFileAttributesW(html) != INVALID_FILE_ATTRIBUTES &&
+           GetFileAttributesW(editor) != INVALID_FILE_ATTRIBUTES;
 }
 
 #define REPLAY_BUF_SIZE (64 * 1024)
@@ -3670,12 +3458,37 @@ static void open_url_or_file(HWND hwnd, int sess_id, const char *input)
 }
 
 
+static DWORD conpty_windows_build_number(void)
+{
+    /* GetVersionEx can return a manifest-dependent compatibility version. */
+    typedef LONG (WINAPI *RtlGetVersionFn)(OSVERSIONINFOW *);
+    static DWORD build_number;
+    static bool tried;
+    if (!tried) {
+        tried = true;
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        RtlGetVersionFn get_version = ntdll ?
+            (RtlGetVersionFn)GetProcAddress(ntdll, "RtlGetVersion") : NULL;
+        OSVERSIONINFOW version = {0};
+        version.dwOSVersionInfoSize = sizeof(version);
+        if (get_version && get_version(&version) == 0)
+            build_number = version.dwBuildNumber;
+    }
+    return build_number;
+}
+
 static void session_send_config_to_window(WebViewSession *sess, HWND target_hwnd)
 {
     if (!sess || !target_hwnd) return;
+    char windows_pty[96] = "null";
+    if (sess->protocol == PROT_CONPTY || sess->protocol == PROT_POWERSHELL) {
+        snprintf(windows_pty, sizeof(windows_pty),
+                 "{\"backend\":\"conpty\",\"buildNumber\":%lu}",
+                 (unsigned long)conpty_windows_build_number());
+    }
     char conf_msg[512];
     snprintf(conf_msg, sizeof(conf_msg),
-             "C%d:{\"lfhascr\":%s,\"crhaslf\":%s,\"wrapMode\":%s,\"protocol\":%d,\"localEcho\":%d,\"localEdit\":%d,\"scrollback\":%d}",
+             "C%d:{\"lfhascr\":%s,\"crhaslf\":%s,\"wrapMode\":%s,\"protocol\":%d,\"localEcho\":%d,\"localEdit\":%d,\"scrollback\":%d,\"windowsPty\":%s}",
              sess->id,
              sess->lfhascr ? "true" : "false",
              sess->crhaslf ? "true" : "false",
@@ -3683,7 +3496,7 @@ static void session_send_config_to_window(WebViewSession *sess, HWND target_hwnd
              sess->protocol,
              sess->localecho,
              sess->localedit,
-             conf_get_int(sess->cfg, CONF_savelines));
+             conf_get_int(sess->cfg, CONF_savelines), windows_pty);
     webview_host_send_to_window(target_hwnd, conf_msg);
 }
 
@@ -3919,6 +3732,13 @@ static HWND create_webview_window(int x, int y, int width, int height)
         NULL, NULL, hinst, NULL
     );
     if (!hwnd) return NULL;
+
+    /* Match the native resize border to the dark web chrome. */
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */,
+                          &dark, sizeof(dark));
+    SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
     WebViewWindow *win = snew(WebViewWindow);
     win->hwnd = hwnd;
@@ -4199,6 +4019,26 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
 {
     if (!msg || !*msg) return;
 
+    /* Window controls from the trusted local terminal page. */
+    if (strncmp(msg, "window:", 7) == 0) {
+        const char *action = msg + 7;
+        if (!strcmp(action, "minimize")) ShowWindow(hwnd, SW_MINIMIZE);
+        else if (!strcmp(action, "maximize"))
+            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+        else if (!strcmp(action, "close")) PostMessage(hwnd, WM_CLOSE, 0, 0);
+        else if (!strcmp(action, "drag")) {
+            ReleaseCapture();
+            PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, GetMessagePos());
+        }
+        else if (!strcmp(action, "menu")) {
+            POINT pt;
+            GetCursorPos(&pt);
+            UINT command = TrackPopupMenu(GetSystemMenu(hwnd, FALSE),
+                TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
+            if (command) PostMessage(hwnd, WM_SYSCOMMAND, command, 0);
+        }
+        return;
+    }
     char type = msg[0];
     const char *payload = msg + 1;
 
@@ -4499,6 +4339,21 @@ static void on_web_message(HWND hwnd, const char *msg, void *userdata)
 static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_NCCALCSIZE:
+        if (wParam && GetParent(hwnd) != HWND_MESSAGE) {
+            NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS *)lParam;
+            LONG top = params->rgrc[0].top;
+            DefWindowProc(hwnd, msg, wParam, lParam);
+            /* Keep the native resize border, replace only the caption. */
+            params->rgrc[0].top = top + (IsZoomed(hwnd) ?
+                GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER) : 1);
+            return 0;
+        }
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    case WM_GETMINMAXINFO:
+        ((MINMAXINFO *)lParam)->ptMinTrackSize.x = 480;
+        ((MINMAXINFO *)lParam)->ptMinTrackSize.y = 240;
+        return 0;
     case WM_WEBVIEW_POST_MSG: {
         char *str = (char *)lParam;
         if (str) {
@@ -4851,8 +4706,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
                  conf_get_int(cfg, CONF_port));
     }
 
-    /* Ensure web assets: load existing immediately or extract if missing */
-    ensure_webview_assets(global_html_path, global_editor_html_path, MAX_PATH);
+    /* Missing files require installer repair; do not fall back to stale caches. */
+    if (!resolve_webview_assets(global_html_path, global_editor_html_path, MAX_PATH)) {
+        MessageBoxW(NULL, L"Web resources are missing. Please reinstall or repair PuTTY-WebView.\nFor portable use, keep the webview folder beside the executable.",
+                    L"PuTTY-WebView", MB_OK | MB_ICONERROR);
+        return 1;
+    }
 
     /* Create hidden message-only window for network socket events */
     HWND sock_hwnd = CreateWindowEx(

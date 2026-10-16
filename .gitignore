@@ -73,6 +73,8 @@ cmake_install.cmake
 /build.log
 /build.out
 /build-vs/
+/.tools/
+/dist/
 /empty.h
 Makefile
 !/contrib/cygtermd/Makefile

@@ -177,6 +177,12 @@ static void SetupWindowController(std::shared_ptr<WebViewWindow> win,
                 if (SUCCEEDED(win->webview->get_Settings(&settings)) && settings) {
                     settings->put_AreDefaultContextMenusEnabled(FALSE);
                     settings->put_IsStatusBarEnabled(FALSE);
+                    ComPtr<ICoreWebView2Settings9> settings9;
+                    if (SUCCEEDED(settings.As(&settings9)) &&
+                        SUCCEEDED(settings9->put_IsNonClientRegionSupportEnabled(TRUE))) {
+                        win->webview->AddScriptToExecuteOnDocumentCreated(
+                            L"window.__nativeWindowDrag = true;", nullptr);
+                    }
                 }
 
                 webview_host_resize(win->hwnd);
@@ -265,4 +271,3 @@ bool webview_host_init(HWND hwnd, const wchar_t *html_path,
 
     return SUCCEEDED(hr);
 }
-

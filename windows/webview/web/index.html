@@ -461,6 +461,12 @@
       resize: both;
       transition: opacity 0.15s ease;
     }
+    /* Floating controls must never participate in native window dragging. */
+    .mle-dialog, .mle-dialog *, .context-menu, .context-menu *,
+    .ssh-auth-backdrop, .ssh-auth-backdrop * {
+      app-region: no-drag;
+      -webkit-app-region: no-drag;
+    }
     .mle-header {
       padding: 7px 12px;
       background: #2d2d2d;
@@ -1110,10 +1116,43 @@
       align-items: center;
       gap: 2px;
     }
+    /* Compact workbench chrome and flat terminal tabs. */
+    #window-bar { display:flex; flex:0 0 30px; height:30px; align-items:center;
+      background:#181818; color:#9d9d9d; user-select:none; font:12px "Segoe UI",sans-serif; }
+    #window-drag { flex:1; height:100%; display:flex; align-items:center; padding-left:12px;
+      app-region:drag; -webkit-app-region:drag; }
+    .window-control { width:46px; height:30px; border:0; background:transparent;
+      color:#cccccc; display:flex; align-items:center; justify-content:center; cursor:default; }
+    .window-control:hover { background:#343434; }
+    .window-control.close:hover { background:#c42b1c; color:white; }
+    .window-control svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1; }
+    .group-tab-bar { height:35px; flex-shrink:0; background:#181818; padding:0;
+      border-bottom:1px solid #2b2b2b; font-family:"Segoe UI",sans-serif; }
+    .group-tabs-list { align-items:stretch; gap:0; }
+    .tab-item { height:34px; border-radius:0; background:#181818; color:#969696;
+      border:0; border-right:1px solid #2b2b2b; padding:0 10px 0 12px;
+      min-width:110px; max-width:240px; font-size:12px; }
+    .tab-item:hover { background:#242424; color:#cccccc; }
+    .tab-item.active { background:#1e1e1e; color:#ffffff; border:0;
+      border-right:1px solid #2b2b2b; box-shadow:inset 0 -1px #0078d4; }
+    .tab-title { font-weight:400; }
+    .status-dot, .status-dot.disconnected { width:6px; height:6px; box-shadow:none; }
+    .tab-close { color:#cccccc; opacity:0; width:20px; height:20px; }
+    .tab-item:hover .tab-close, .tab-item.active .tab-close, .tab-close:focus-visible { opacity:1; }
+    .tab-close:hover { background:#383838; color:#ffffff; }
+    .group-actions { padding:0 6px; }
+    .dock-group.active { border-color:transparent; }
+    #dock-root { min-height:0; }
   </style>
 </head>
 <body>
   <div id="app-container">
+    <div id="window-bar">
+      <div id="window-drag">PuTTY WebView</div>
+      <button class="window-control" data-window="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 12 12"><path d="M1 6.5h10"/></svg></button>
+      <button class="window-control" data-window="maximize" title="最大化 / 还原" aria-label="最大化 / 还原"><svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9"/></svg></button>
+      <button class="window-control close" data-window="close" title="关闭窗口" aria-label="关闭窗口"><svg viewBox="0 0 12 12"><path d="m1.5 1.5 9 9m0-9-9 9"/></svg></button>
+    </div>
     <div id="dock-root">
       <!-- Dynamic Docking Tree -->
     </div>
@@ -1497,6 +1536,20 @@
         window.chrome.webview.postMessage(type + data);
       }
     }
+
+    document.querySelectorAll('[data-window]').forEach(button => {
+      button.addEventListener('click', () => sendToHost('window:', button.dataset.window));
+    });
+    const dragRegion = document.getElementById('window-drag');
+    dragRegion.addEventListener('mousedown', event => {
+      if (!window.__nativeWindowDrag && event.button === 0 && event.detail === 1) sendToHost('window:', 'drag');
+    });
+    dragRegion.addEventListener('dblclick', () => {
+      if (!window.__nativeWindowDrag) sendToHost('window:', 'maximize');
+    });
+    dragRegion.addEventListener('contextmenu', event => {
+      if (!window.__nativeWindowDrag) { event.preventDefault(); sendToHost('window:', 'menu'); }
+    });
 
     // VS Code-aligned Terminal Resize Debouncer
     class TerminalResizeDebouncer {
@@ -2619,6 +2672,7 @@
         rightClickSelectsWord: false,
         scrollback: sessions[id]?.config?.scrollback || 10000,
         convertEol: initialConvertEol,
+        windowsPty: sessions[id]?.config?.windowsPty || {},
         windowOptions: {
           getWinSizePixels: true,
           getCellSizePixels: true,
@@ -3626,6 +3680,9 @@
               } else {
                 sessions[id].config = Object.assign(sessions[id].config || {}, cfg);
                 if (sessions[id].term) {
+                  // ConPTY repaints its viewport after resize. Keep history out
+                  // of that viewport so the repaint cannot overwrite it.
+                  sessions[id].term.options.windowsPty = cfg.windowsPty || {};
                   if (cfg.lfhascr !== undefined) {
                     sessions[id].term.options.convertEol = !!cfg.lfhascr;
                   }
@@ -3718,12 +3775,17 @@
         }
       }
 
+      function mleMinimumTop() {
+        const bar = document.getElementById('window-bar');
+        return bar ? Math.ceil(bar.getBoundingClientRect().bottom) : 0;
+      }
+
       function centerMleDialog() {
         if (!mleDialogEl) return;
         const w = (mleDialogPos && mleDialogPos.width) ? mleDialogPos.width : Math.min(700, window.innerWidth - 40);
         const h = (mleDialogPos && mleDialogPos.height) ? mleDialogPos.height : Math.min(440, window.innerHeight - 60);
         const left = Math.max(10, Math.round((window.innerWidth - w) / 2));
-        const top = Math.max(20, Math.round((window.innerHeight - h) / 2));
+        const top = Math.max(mleMinimumTop(), Math.round((window.innerHeight - h) / 2));
         mleDialogEl.style.left = left + 'px';
         mleDialogEl.style.top = top + 'px';
         mleDialogEl.style.width = w + 'px';
@@ -3772,7 +3834,7 @@
             const maxLeft = Math.max(10, window.innerWidth - 80);
             const maxTop = Math.max(10, window.innerHeight - 50);
             newLeft = Math.max(-mleDialogEl.offsetWidth + 100, Math.min(maxLeft, newLeft));
-            newTop = Math.max(0, Math.min(maxTop, newTop));
+            newTop = Math.max(mleMinimumTop(), Math.min(maxTop, newTop));
 
             mleDialogEl.style.left = newLeft + 'px';
             mleDialogEl.style.top = newTop + 'px';
@@ -4023,7 +4085,7 @@
           const maxLeft = Math.max(10, window.innerWidth - 80);
           const maxTop = Math.max(10, window.innerHeight - 50);
           const curLeft = Math.max(10, Math.min(maxLeft, mleDialogPos.left));
-          const curTop = Math.max(0, Math.min(maxTop, mleDialogPos.top));
+          const curTop = Math.max(mleMinimumTop(), Math.min(maxTop, mleDialogPos.top));
           mleDialogEl.style.left = curLeft + 'px';
           mleDialogEl.style.top = curTop + 'px';
           if (mleDialogPos.width) mleDialogEl.style.width = mleDialogPos.width + 'px';

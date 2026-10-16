@@ -213,17 +213,6 @@ string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}
 string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
-add_library(miniz STATIC
-  miniz/miniz.c
-  miniz/miniz_tdef.c
-  miniz/miniz_tinfl.c
-  miniz/miniz_zip.c
-)
-target_include_directories(miniz PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/miniz)
-if(MSVC)
-  target_compile_options(miniz PRIVATE "/utf-8" "/wd4138" "/wd4244" "/wd4267")
-endif()
-
 add_executable(putty_webview
   putty_webview.c
   conpty.c
@@ -240,7 +229,6 @@ target_compile_definitions(putty_webview PRIVATE PUTTY_WEBVIEW_EMBEDDED_SFTP)
 target_include_directories(putty_webview PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/include
   ${CMAKE_CURRENT_SOURCE_DIR}/webview
-  ${CMAKE_CURRENT_SOURCE_DIR}/miniz
 )
 
 if(MSVC)
@@ -249,21 +237,25 @@ endif()
 
 target_link_libraries(putty_webview
   ${CMAKE_CURRENT_SOURCE_DIR}/webview/lib/x64/WebView2LoaderStatic.lib
-  miniz
   sftpclient
   version
   crypt32
+  dwmapi
   guiterminal guimisc eventloop sshclient otherbackends settings network crypto
   utils
   ${platform_libraries})
 set_target_properties(putty_webview PROPERTIES WIN32_EXECUTABLE ON)
 installed_program(putty_webview)
 
-add_custom_command(TARGET putty_webview POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_CURRENT_SOURCE_DIR}/webview/web
-    $<TARGET_FILE_DIR:putty_webview>/webview/web
+add_custom_target(putty_webview_assets
+  COMMAND ${CMAKE_COMMAND}
+    "-DASSET_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/webview/web"
+    "-DASSET_DESTINATION=$<TARGET_FILE_DIR:putty_webview>/webview/web"
+    "-DBUILD_ROOT=${CMAKE_BINARY_DIR}"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/webview/sync_assets.cmake
+  COMMENT "Refreshing external WebView assets"
+  VERBATIM
 )
+add_dependencies(putty_webview putty_webview_assets)
 
 add_custom_target(putty_webkit DEPENDS putty_webview)
-
